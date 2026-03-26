@@ -1,10 +1,18 @@
 import os
+import json
 import requests
+from openai import OpenAI
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 URL = f"https://api.telegram.org/bot{TOKEN}/"
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
+
+# простая память в процессе
+USER_STATE = {}
 
 
 def get_updates():
@@ -43,131 +51,100 @@ def start_keyboard():
     }
 
 
-def normalize_text(text: str) -> str:
-    return text.lower().strip()
-
-
-def analyze_offer(user_text: str):
-    text = normalize_text(user_text)
-
-    relationship_keywords = [
-        "отнош", "люб", "парень", "парнем", "девушка", "девушкой",
-        "муж", "жена", "бывш", "расстав", "развод", "измена",
-        "предательство", "чувства", "влюб", "ревность", "ссора"
-    ]
-
-    deep_keywords = [
-        "сложно", "тяжело", "больно", "страшно", "кризис",
-        "не понимаю", "запутал", "запуталась", "запутался",
-        "что делать", "помоги выбрать", "помоги разобраться",
-        "будущее", "судьба", "предназначение", "энергия",
-        "деньги", "работа", "карьера", "путь", "выбор", "проблем"
-    ]
-
-    basic_keywords = [
-        "быстро", "кратко", "коротко", "мини",
-        "один вопрос", "простой вопрос", "быстрый ответ"
-    ]
-
-    deep_score = 0
-    basic_score = 0
-    reasons = []
-
-    for word in relationship_keywords:
-        if word in text:
-            deep_score += 2
-            if "отношения или чувства" not in reasons:
-                reasons.append("я вижу, что вопрос связан с отношениями или чувствами")
-
-    for word in deep_keywords:
-        if word in text:
-            deep_score += 1
-            if word in ["сложно", "тяжело", "больно", "страшно", "кризис", "проблем"]:
-                if "ситуация звучит непросто и эмоционально" not in reasons:
-                    reasons.append("ситуация звучит непросто и эмоционально")
-            elif word in ["не понимаю", "запутал", "запуталась", "запутался", "что делать", "помоги выбрать", "помоги разобраться", "выбор"]:
-                if "тебе нужна не просто подсказка, а ясность" not in reasons:
-                    reasons.append("тебе нужна не просто подсказка, а ясность")
-            else:
-                if "здесь есть глубина и несколько слоев" not in reasons:
-                    reasons.append("здесь есть глубина и несколько слоев")
-
-    for word in basic_keywords:
-        if word in text:
-            basic_score += 2
-            if "ты хочешь быстрый и точный ответ" not in reasons:
-                reasons.append("ты хочешь быстрый и точный ответ")
-
-    if len(text) > 80:
-        deep_score += 1
-        if "в запросе уже много контекста" not in reasons:
-            reasons.append("в запросе уже много контекста")
-
-    if len(text) > 160:
-        deep_score += 1
-        if "вопрос выглядит многослойным" not in reasons:
-            reasons.append("вопрос выглядит многослойным")
-
-    if "?" in text and len(text) < 50:
-        basic_score += 1
-        if "это похоже на один конкретный вопрос" not in reasons:
-            reasons.append("это похоже на один конкретный вопрос")
-
-    if deep_score >= 2 and deep_score > basic_score:
-        return {
-            "offer": "deep",
-            "reasons": reasons[:2]
+def get_user_state(user_id: int):
+    if user_id not in USER_STATE:
+        USER_STATE[user_id] = {
+            "previous_response_id": None,
+            "last_offer": None
         }
+    return USER_STATE[user_id]
 
-    if basic_score >= 2 and basic_score >= deep_score:
-        return {
-            "offer": "basic",
-            "reasons": reasons[:2]
-        }
 
-    return {
-        "offer": "unknown",
-        "reasons": reasons[:2]
+def madame_mira_prompt():
+    return """
+Ты — Madame Mira, мягкий и умный Telegram-продажник разборов.
+
+Твоя задача:
+1. Понять, что беспокоит человека.
+2. Порекомендовать один из двух форматов:
+   - Мини-разбор за $11
+   - Глубокий разбор за $29
+3. Коротко объяснить, почему советуешь именно его.
+4. Говорить тепло, уверенно, женственно, без кринжа и без лишней воды.
+5. Не показывать сразу оба варианта, если можешь уверенно выбрать один.
+6. Если данных мало, задай 1 уточняющий вопрос.
+
+Когда советовать $29:
+- отношения, муж, парень, бывший, измена, расставание
+- эмоционально тяжелая или многослойная ситуация
+- много контекста
+- человек запутан и хочет понять глубже
+
+Когда советовать $11:
+- один короткий вопрос
+- запрос на быстрый, краткий ответ
+- низкий порог входа
+- человек хочет попробовать формат
+
+Правила:
+- Никогда не меняй цены.
+- Не придумывай другие тарифы.
+- Не давай медицинских, юридических или финансовых гарантий.
+- Отвечай коротко.
+- Не пиши длинные простыни.
+- Не повторяй одно и то же в каждом сообщении.
+
+Верни только JSON в таком формате:
+{
+  "type": "recommendation" | "clarify",
+  "offer": "basic" | "deep" | "unknown",
+  "message": "текст ответа пользователю"
+}
+""".strip()
+
+
+def ask_gpt(user_id: int, user_text: str):
+    state = get_user_state(user_id)
+
+    kwargs = {
+        "model": "gpt-5.4",
+        "instructions": madame_mira_prompt(),
+        "input": user_text
     }
 
+    if state["previous_response_id"]:
+        kwargs["previous_response_id"] = state["previous_response_id"]
 
-def build_reason_text(reasons):
-    if not reasons:
-        return ""
+    response = client.responses.create(**kwargs)
+    state["previous_response_id"] = response.id
 
-    if len(reasons) == 1:
-        return f"Почему я советую это: {reasons[0]}."
-    return f"Почему я советую это: {reasons[0]}, и ещё {reasons[1]}."
+    text = getattr(response, "output_text", "").strip()
+
+    try:
+        data = json.loads(text)
+        return data
+    except Exception:
+        return {
+            "type": "clarify",
+            "offer": "unknown",
+            "message": "Я чувствую, что здесь есть важный слой ✨ Расскажи чуть подробнее, что именно болит в этой ситуации?"
+        }
 
 
-def handle_user_message(chat_id, text):
-    analysis = analyze_offer(text)
-    offer = analysis["offer"]
-    reason_text = build_reason_text(analysis["reasons"])
+def handle_user_message(chat_id, user_id, text):
+    result = ask_gpt(user_id, text)
 
-    if offer == "deep":
-        message = (
-            "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\n"
-            f"{reason_text}\n\n"
-            "Он подходит, когда важно не просто получить ответ, а увидеть ситуацию шире и глубже."
-        )
+    message = result.get("message", "Расскажи чуть подробнее.")
+    offer = result.get("offer", "unknown")
+    result_type = result.get("type", "clarify")
+
+    state = get_user_state(user_id)
+    state["last_offer"] = offer
+
+    if result_type == "recommendation":
         send_message(chat_id, message, start_keyboard())
-
-    elif offer == "basic":
-        message = (
-            "Я бы советовала тебе ✨ Мини-разбор за $11.\n\n"
-            f"{reason_text}\n\n"
-            "Он подходит, когда нужен быстрый и точный ответ на один главный вопрос."
-        )
-        send_message(chat_id, message, start_keyboard())
-
     else:
-        send_message(
-            chat_id,
-            "Я пока не хочу гадать наугад ✨\n\n"
-            "Пока здесь вижу два возможных варианта. Выбери, что тебе ближе:",
-            start_keyboard()
-        )
+        send_message(chat_id, message)
 
 
 def main():
@@ -186,18 +163,18 @@ def main():
 
             if "message" in update:
                 chat_id = update["message"]["chat"]["id"]
+                user_id = update["message"]["from"]["id"]
                 text = update["message"].get("text", "")
 
                 if text == "/start":
                     send_message(
                         chat_id,
                         "Привет, я Madame Mira ✨\n\n"
-                        "Я помогу выбрать формат разбора.\n\n"
-                        "Выбери вариант ниже или сразу опиши свою ситуацию одним сообщением.",
+                        "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат разбора тебе подойдет лучше.",
                         start_keyboard()
                     )
                 else:
-                    handle_user_message(chat_id, text)
+                    handle_user_message(chat_id, user_id, text)
 
             elif "callback_query" in update:
                 query = update["callback_query"]
@@ -210,7 +187,7 @@ def main():
                     send_message(
                         chat_id,
                         "✨ Мини-разбор — $11\n\n"
-                        "Подходит, если тебе нужен быстрый ответ на один главный вопрос."
+                        "Подходит, если тебе нужен быстрый и точный ответ на один главный вопрос."
                     )
                 elif data == "deep":
                     send_message(
@@ -221,9 +198,7 @@ def main():
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Опиши свою ситуацию одним сообщением. Например:\n\n"
-                        "«У меня проблемы с парнем, не понимаю, есть ли будущее»\n\n"
-                        "И я подскажу не только формат, но и почему советую именно его 💬"
+                        "Напиши одним сообщением, что тебя сейчас больше всего волнует. Я не просто покажу вариант, а объясню, почему советую именно его 💬"
                     )
 
 
