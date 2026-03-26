@@ -43,39 +43,131 @@ def start_keyboard():
     }
 
 
-def choose_offer(user_text: str):
-    text = user_text.lower().strip()
+def normalize_text(text: str) -> str:
+    return text.lower().strip()
+
+
+def analyze_offer(user_text: str):
+    text = normalize_text(user_text)
+
+    relationship_keywords = [
+        "отнош", "люб", "парень", "парнем", "девушка", "девушкой",
+        "муж", "жена", "бывш", "расстав", "развод", "измена",
+        "предательство", "чувства", "влюб", "ревность", "ссора"
+    ]
 
     deep_keywords = [
-        "отнош", "люб", "бывш", "муж", "жена", "развод", "предательство",
-        "измена", "чувства", "страх", "кризис", "сложно", "тяжело",
-        "не понимаю", "запуталась", "запутался", "выбор", "будущее",
-        "предназначение", "деньги", "работа", "путь", "энергия"
+        "сложно", "тяжело", "больно", "страшно", "кризис",
+        "не понимаю", "запутал", "запуталась", "запутался",
+        "что делать", "помоги выбрать", "помоги разобраться",
+        "будущее", "судьба", "предназначение", "энергия",
+        "деньги", "работа", "карьера", "путь", "выбор", "проблем"
     ]
 
     basic_keywords = [
-        "быстро", "кратко", "один вопрос", "простой вопрос", "коротко", "мини"
+        "быстро", "кратко", "коротко", "мини",
+        "один вопрос", "простой вопрос", "быстрый ответ"
     ]
 
     deep_score = 0
     basic_score = 0
+    reasons = []
+
+    for word in relationship_keywords:
+        if word in text:
+            deep_score += 2
+            if "отношения или чувства" not in reasons:
+                reasons.append("я вижу, что вопрос связан с отношениями или чувствами")
 
     for word in deep_keywords:
         if word in text:
             deep_score += 1
+            if word in ["сложно", "тяжело", "больно", "страшно", "кризис", "проблем"]:
+                if "ситуация звучит непросто и эмоционально" not in reasons:
+                    reasons.append("ситуация звучит непросто и эмоционально")
+            elif word in ["не понимаю", "запутал", "запуталась", "запутался", "что делать", "помоги выбрать", "помоги разобраться", "выбор"]:
+                if "тебе нужна не просто подсказка, а ясность" not in reasons:
+                    reasons.append("тебе нужна не просто подсказка, а ясность")
+            else:
+                if "здесь есть глубина и несколько слоев" not in reasons:
+                    reasons.append("здесь есть глубина и несколько слоев")
 
     for word in basic_keywords:
         if word in text:
-            basic_score += 1
+            basic_score += 2
+            if "ты хочешь быстрый и точный ответ" not in reasons:
+                reasons.append("ты хочешь быстрый и точный ответ")
 
-    if len(text) > 120:
+    if len(text) > 80:
         deep_score += 1
+        if "в запросе уже много контекста" not in reasons:
+            reasons.append("в запросе уже много контекста")
 
-    if deep_score >= 2:
-        return "deep"
-    if basic_score >= 1:
-        return "basic"
-    return "unknown"
+    if len(text) > 160:
+        deep_score += 1
+        if "вопрос выглядит многослойным" not in reasons:
+            reasons.append("вопрос выглядит многослойным")
+
+    if "?" in text and len(text) < 50:
+        basic_score += 1
+        if "это похоже на один конкретный вопрос" not in reasons:
+            reasons.append("это похоже на один конкретный вопрос")
+
+    if deep_score >= 2 and deep_score > basic_score:
+        return {
+            "offer": "deep",
+            "reasons": reasons[:2]
+        }
+
+    if basic_score >= 2 and basic_score >= deep_score:
+        return {
+            "offer": "basic",
+            "reasons": reasons[:2]
+        }
+
+    return {
+        "offer": "unknown",
+        "reasons": reasons[:2]
+    }
+
+
+def build_reason_text(reasons):
+    if not reasons:
+        return ""
+
+    if len(reasons) == 1:
+        return f"Почему я советую это: {reasons[0]}."
+    return f"Почему я советую это: {reasons[0]}, и ещё {reasons[1]}."
+
+
+def handle_user_message(chat_id, text):
+    analysis = analyze_offer(text)
+    offer = analysis["offer"]
+    reason_text = build_reason_text(analysis["reasons"])
+
+    if offer == "deep":
+        message = (
+            "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\n"
+            f"{reason_text}\n\n"
+            "Он подходит, когда важно не просто получить ответ, а увидеть ситуацию шире и глубже."
+        )
+        send_message(chat_id, message, start_keyboard())
+
+    elif offer == "basic":
+        message = (
+            "Я бы советовала тебе ✨ Мини-разбор за $11.\n\n"
+            f"{reason_text}\n\n"
+            "Он подходит, когда нужен быстрый и точный ответ на один главный вопрос."
+        )
+        send_message(chat_id, message, start_keyboard())
+
+    else:
+        send_message(
+            chat_id,
+            "Я пока не хочу гадать наугад ✨\n\n"
+            "Пока здесь вижу два возможных варианта. Выбери, что тебе ближе:",
+            start_keyboard()
+        )
 
 
 def main():
@@ -101,34 +193,11 @@ def main():
                         chat_id,
                         "Привет, я Madame Mira ✨\n\n"
                         "Я помогу выбрать формат разбора.\n\n"
-                        "Выбери вариант ниже или напиши свой вопрос.",
+                        "Выбери вариант ниже или сразу опиши свою ситуацию одним сообщением.",
                         start_keyboard()
                     )
                 else:
-                    offer = choose_offer(text)
-
-                    if offer == "deep":
-                        send_message(
-                            chat_id,
-                            "Я чувствую, что здесь вопрос не поверхностный ✨\n\n"
-                            "Тебе больше подойдет 🔮 Глубокий разбор за $29.\n\n"
-                            "Он нужен, когда важно увидеть ситуацию шире и глубже.",
-                            start_keyboard()
-                        )
-                    elif offer == "basic":
-                        send_message(
-                            chat_id,
-                            "Здесь лучше подойдет ✨ Мини-разбор за $11.\n\n"
-                            "Он хорош, когда нужен быстрый и точный ответ на один главный вопрос.",
-                            start_keyboard()
-                        )
-                    else:
-                        send_message(
-                            chat_id,
-                            "Я услышала тебя ✨\n\n"
-                            "Могу предложить оба варианта, а ты почувствуешь, что тебе ближе:",
-                            start_keyboard()
-                        )
+                    handle_user_message(chat_id, text)
 
             elif "callback_query" in update:
                 query = update["callback_query"]
@@ -147,12 +216,14 @@ def main():
                     send_message(
                         chat_id,
                         "🔮 Глубокий разбор — $29\n\n"
-                        "Подходит, если ситуация сложная и хочется глубины, ясности и большего объема."
+                        "Подходит, если ситуация сложная, эмоциональная или многослойная и хочется увидеть её глубже."
                     )
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я подскажу, какой формат подойдет лучше 💬"
+                        "Опиши свою ситуацию одним сообщением. Например:\n\n"
+                        "«У меня проблемы с парнем, не понимаю, есть ли будущее»\n\n"
+                        "И я подскажу не только формат, но и почему советую именно его 💬"
                     )
 
 
