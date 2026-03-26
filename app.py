@@ -51,6 +51,7 @@ def payment_keyboard_for_offer(offer: str):
         return {
             "inline_keyboard": [
                 [{"text": "💰 Оплатить $11 криптой", "url": CRYPTO_11}],
+                [{"text": "✅ Я оплатил(а)", "callback_data": "paid"}],
                 [{"text": "🔮 Выбрать глубокий $29", "callback_data": "deep_info"}],
                 [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
             ]
@@ -59,6 +60,7 @@ def payment_keyboard_for_offer(offer: str):
     return {
         "inline_keyboard": [
             [{"text": "🔮 Оплатить $29 криптой", "url": CRYPTO_29}],
+            [{"text": "✅ Я оплатил(а)", "callback_data": "paid"}],
             [{"text": "✨ Выбрать мини $11", "callback_data": "basic_info"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
         ]
@@ -73,7 +75,7 @@ def choose_offer(text: str):
         "ушел", "ушёл", "другая", "другой", "любов", "чувства", "больно",
         "сложно", "тяжело", "кризис", "развод", "расстав", "ревность",
         "запутал", "запуталась", "запутался", "не понимаю", "что делать",
-        "будущее", "судьба", "энергия", "выбор"
+        "будущее", "судьба", "энергия", "выбор", "подруга"
     ]
 
     basic_keywords = [
@@ -191,6 +193,17 @@ def main():
                         send_message(
                             chat_id,
                             "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я помогу выбрать формат 💬"
+                        )
+
+                    elif data == "paid":
+                        send_message(
+                            chat_id,
+                            "Приняла оплату ✨\n\n"
+                            "Теперь пришли одним сообщением:\n\n"
+                            "1. Твоё имя\n"
+                            "2. Ситуацию\n"
+                            "3. Что именно хочешь понять\n\n"
+                            "После этого можно начинать разбор 💫"
                         )
 
         except Exception as e:
