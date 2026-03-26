@@ -2,6 +2,8 @@ import os
 import requests
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 last_update_id = None
@@ -27,6 +29,18 @@ def send_message(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
+    requests.post(URL + "sendMessage", json=payload, timeout=30)
+
+
+def notify_admin(text):
+    if not ADMIN_CHAT_ID:
+        print("ADMIN_CHAT_ID not set")
+        return
+
+    payload = {
+        "chat_id": ADMIN_CHAT_ID,
+        "text": text
+    }
     requests.post(URL + "sendMessage", json=payload, timeout=30)
 
 
@@ -130,10 +144,43 @@ def choose_offer(text: str):
     return "unknown"
 
 
+def format_offer_text(offer):
+    if offer == "basic":
+        return "Мини-разбор $11"
+    if offer == "deep":
+        return "Глубокий разбор $29"
+    return "Не выбран"
+
+
+def finish_application(chat_id, user_id):
+    user = get_user_state(user_id)
+    offer_text = format_offer_text(user["offer"])
+
+    send_message(
+        chat_id,
+        "Заявка принята ✨\n\n"
+        f"Формат: {offer_text}\n"
+        f"Имя: {user['name']}\n\n"
+        "Я получила всё, что нужно для начала разбора 💫"
+    )
+
+    admin_text = (
+        "Новая заявка в Madame Mira 💸\n\n"
+        f"User ID: {user_id}\n"
+        f"Формат: {offer_text}\n"
+        f"Имя: {user['name']}\n\n"
+        f"Ситуация:\n{user['situation']}\n\n"
+        f"Что хочет понять:\n{user['question']}"
+    )
+
+    notify_admin(admin_text)
+
+    user["step"] = "done"
+
+
 def handle_user_message(chat_id, user_id, text):
     user = get_user_state(user_id)
 
-    # Сбор заявки после оплаты
     if user["step"] == "waiting_name":
         user["name"] = text
         user["step"] = "waiting_situation"
@@ -154,24 +201,9 @@ def handle_user_message(chat_id, user_id, text):
 
     if user["step"] == "waiting_question":
         user["question"] = text
-        user["step"] = "done"
-
-        offer_text = "не указан"
-        if user["offer"] == "basic":
-            offer_text = "Мини-разбор $11"
-        elif user["offer"] == "deep":
-            offer_text = "Глубокий разбор $29"
-
-        send_message(
-            chat_id,
-            "Заявка принята ✨\n\n"
-            f"Формат: {offer_text}\n"
-            f"Имя: {user['name']}\n\n"
-            "Я получила всё, что нужно для начала разбора 💫"
-        )
+        finish_application(chat_id, user_id)
         return
 
-    # Обычная логика выбора тарифа
     offer = choose_offer(text)
 
     if offer == "basic":
@@ -279,8 +311,4 @@ def main():
                         )
 
         except Exception as e:
-            print("RUNTIME ERROR:", str(e))
-
-
-if __name__ == "__main__":
-    main()
+           
