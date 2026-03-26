@@ -10,7 +10,7 @@ URL = f"https://api.telegram.org/bot{TOKEN}/"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
-USER_STATE = {}
+WAITING_FOR_DESCRIPTION = {}
 
 
 def get_updates():
@@ -49,13 +49,6 @@ def start_keyboard():
     }
 
 
-def get_user_state(user_id: int):
-    if user_id not in USER_STATE:
-        USER_STATE[user_id] = {"previous_response_id": None}
-    return USER_STATE[user_id]
-
-
-# 🔥 ВОТ ТУТ ВЕСЬ СМЫСЛ
 def prompt_text():
     return """
 Ты — Madame Mira, уверенный Telegram-продажник разборов.
@@ -64,58 +57,42 @@ def prompt_text():
 - Мини-разбор — $11
 - Глубокий разбор — $29
 
-ТВОЯ ГЛАВНАЯ ЗАДАЧА:
-👉 Всегда выбрать один вариант и рекомендовать его.
+Твоя задача:
+1. Прочитать сообщение пользователя.
+2. Сразу выбрать ОДИН формат.
+3. Коротко объяснить, почему.
+4. Отвечать тепло, уверенно и по делу.
 
-НЕ будь осторожной.
-НЕ тяни время.
-НЕ задавай лишние вопросы.
+Правила выбора:
+- Выбирай $29, если тема про отношения, мужа, парня, бывшего, измену, боль, предательство, сильные эмоции, путаницу, сложную ситуацию.
+- Выбирай $11, если вопрос короткий, простой, быстрый, один конкретный.
+- Не задавай уточняющих вопросов.
+- Не предлагай оба варианта.
+- Не меняй цены.
+- Не пиши длинно.
 
----
-
-Когда выбирать $29:
-- отношения, муж, парень, бывший
-- измена, боль, предательство
-- эмоционально тяжело
-- человек запутан
-
-Когда выбирать $11:
-- простой вопрос
-- быстрый ответ
-- мало текста
-
----
-
-ПРАВИЛА:
-❌ НЕ задавай уточнения если уже есть контекст  
-❌ НЕ показывай оба варианта  
-❌ НЕ сомневайся  
-
----
-
-ФОРМАТ:
+Верни строго JSON:
 
 {
-  "type": "recommendation",
-  "offer": "basic" или "deep",
-  "message": "ответ пользователю"
+  "offer": "basic" or "deep",
+  "message": "готовый текст для пользователя"
 }
 
----
+Пример для сложной ситуации:
+{
+  "offer": "deep",
+  "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
+}
 
-Пример:
-
-"Я бы советовала тебе 🔮 Глубокий разбор за $29.
-
-Почему: ситуация связана с отношениями и сильной болью.
-
-Здесь важно не просто получить ответ, а понять глубже."
-"""
+Пример для простого вопроса:
+{
+  "offer": "basic",
+  "message": "Я бы советовала тебе ✨ Мини-разбор за $11. Потому что здесь лучше подходит быстрый и точный ответ на один главный вопрос."
+}
+""".strip()
 
 
-def ask_gpt(user_id: int, user_text: str):
-    state = get_user_state(user_id)
-
+def ask_gpt(user_text: str):
     try:
         response = client.responses.create(
             model="gpt-4.1-mini",
@@ -130,16 +107,14 @@ def ask_gpt(user_id: int, user_text: str):
     except Exception as e:
         print("GPT ERROR:", str(e))
         return {
-            "type": "recommendation",
             "offer": "deep",
-            "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\nПотому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
+            "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
         }
 
 
-def handle_user_message(chat_id, user_id, text):
-    result = ask_gpt(user_id, text)
-
-    message = result.get("message", "Опиши чуть подробнее.")
+def handle_user_message(chat_id, text):
+    result = ask_gpt(text)
+    message = result.get("message", "Я бы советовала тебе 🔮 Глубокий разбор за $29.")
     send_message(chat_id, message, start_keyboard())
 
 
@@ -160,39 +135,49 @@ def main():
             if "message" in update:
                 chat_id = update["message"]["chat"]["id"]
                 user_id = update["message"]["from"]["id"]
-                text = update["message"].get("text", "")
+                text = update["message"].get("text", "").strip()
+
+                if not text:
+                    continue
 
                 if text == "/start":
+                    WAITING_FOR_DESCRIPTION[user_id] = False
                     send_message(
                         chat_id,
-                        "Привет, я Madame Mira ✨\n\n"
-                        "Опиши свою ситуацию одним сообщением — и я сразу скажу, какой формат тебе подойдет лучше.",
+                        "Привет, я Madame Mira ✨\n\nОпиши свою ситуацию одним сообщением, и я сразу скажу, какой формат тебе подойдет лучше.",
                         start_keyboard()
                     )
                 else:
-                    handle_user_message(chat_id, user_id, text)
+                    handle_user_message(chat_id, text)
+                    WAITING_FOR_DESCRIPTION[user_id] = False
 
             elif "callback_query" in update:
                 query = update["callback_query"]
                 data = query["data"]
                 chat_id = query["message"]["chat"]["id"]
+                user_id = query["from"]["id"]
 
                 answer_callback_query(query["id"])
 
                 if data == "basic":
+                    WAITING_FOR_DESCRIPTION[user_id] = False
                     send_message(
                         chat_id,
-                        "✨ Мини-разбор — $11\n\nБыстрый и точный ответ на один вопрос."
+                        "✨ Мини-разбор — $11\n\nБыстрый и точный ответ на один главный вопрос."
                     )
+
                 elif data == "deep":
+                    WAITING_FOR_DESCRIPTION[user_id] = False
                     send_message(
                         chat_id,
-                        "🔮 Глубокий разбор — $29\n\nПолный разбор ситуации с пониманием причин и будущего."
+                        "🔮 Глубокий разбор — $29\n\nПолный разбор ситуации с пониманием причин и дальнейшего движения."
                     )
+
                 elif data == "help":
+                    WAITING_FOR_DESCRIPTION[user_id] = True
                     send_message(
                         chat_id,
-                        "Опиши ситуацию, и я скажу, какой формат лучше 💬"
+                        "Опиши ситуацию одним сообщением, и я скажу, какой формат подойдет лучше 💬"
                     )
 
 
