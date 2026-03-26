@@ -57,6 +57,7 @@ def main():
         for update in updates["result"]:
             last_update_id = update["update_id"] + 1
 
+            # Сообщения
             if "message" in update:
                 chat_id = update["message"]["chat"]["id"]
                 text = update["message"].get("text", "")
@@ -73,9 +74,11 @@ def main():
                     send_message(
                         chat_id,
                         "Я услышала тебя ✨\n\n"
-                        "Нажми /start, чтобы увидеть варианты разбора."
+                        "Выбери вариант ниже или напиши подробнее:",
+                        start_keyboard()
                     )
 
+            # Нажатия кнопок
             elif "callback_query" in update:
                 query = update["callback_query"]
                 data = query["data"]
@@ -87,18 +90,18 @@ def main():
                     send_message(
                         chat_id,
                         "✨ Мини-разбор — $11\n\n"
-                        "Подходит, если тебе нужен быстрый ответ на один главный вопрос."
+                        "Подходит, если тебе нужен быстрый ответ на один вопрос."
                     )
                 elif data == "deep":
                     send_message(
                         chat_id,
                         "🔮 Глубокий разбор — $29\n\n"
-                        "Подходит, если ситуация сложная и хочется увидеть картину глубже."
+                        "Подходит, если ситуация сложная и хочется глубины."
                     )
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Напиши в одном сообщении, что тебя сейчас больше всего волнует, и я подскажу, какой формат подойдет."
+                        "Опиши свою ситуацию, и я помогу выбрать формат 💬"
                     )
 
 
