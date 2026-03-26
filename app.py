@@ -55,71 +55,84 @@ def get_user_state(user_id: int):
     return USER_STATE[user_id]
 
 
+# 🔥 ВОТ ТУТ ВЕСЬ СМЫСЛ
 def prompt_text():
     return """
-Ты — Madame Mira, Telegram-консультант по продаже разборов.
+Ты — Madame Mira, уверенный Telegram-продажник разборов.
 
-У тебя есть только 2 формата:
+У тебя есть только 2 варианта:
 - Мини-разбор — $11
 - Глубокий разбор — $29
 
-Твоя задача:
-1. Прочитать сообщение пользователя.
-2. Выбрать один формат, если уверена.
-3. Коротко объяснить, почему.
-4. Если уверенности мало, задать 1 уточняющий вопрос.
+ТВОЯ ГЛАВНАЯ ЗАДАЧА:
+👉 Всегда выбрать один вариант и рекомендовать его.
 
-Когда чаще советовать $29:
-- отношения, муж, парень, бывший, измена, расставание
+НЕ будь осторожной.
+НЕ тяни время.
+НЕ задавай лишние вопросы.
+
+---
+
+Когда выбирать $29:
+- отношения, муж, парень, бывший
+- измена, боль, предательство
 - эмоционально тяжело
-- много слоев и контекста
-- пользователь запутан и хочет понять глубже
+- человек запутан
 
-Когда чаще советовать $11:
-- один короткий вопрос
+Когда выбирать $11:
+- простой вопрос
 - быстрый ответ
-- краткий формат
-- пользователь хочет попробовать
+- мало текста
 
-Пиши тепло, коротко, без воды.
-Никогда не меняй цены.
-Верни строго JSON такого вида:
+---
+
+ПРАВИЛА:
+❌ НЕ задавай уточнения если уже есть контекст  
+❌ НЕ показывай оба варианта  
+❌ НЕ сомневайся  
+
+---
+
+ФОРМАТ:
 
 {
-  "type": "recommendation" or "clarify",
-  "offer": "basic" or "deep" or "unknown",
-  "message": "текст для пользователя"
+  "type": "recommendation",
+  "offer": "basic" или "deep",
+  "message": "ответ пользователю"
 }
-""".strip()
+
+---
+
+Пример:
+
+"Я бы советовала тебе 🔮 Глубокий разбор за $29.
+
+Почему: ситуация связана с отношениями и сильной болью.
+
+Здесь важно не просто получить ответ, а понять глубже."
+"""
 
 
 def ask_gpt(user_id: int, user_text: str):
     state = get_user_state(user_id)
 
     try:
-        kwargs = {
-            "model": "gpt-4.1-mini",
-            "instructions": prompt_text(),
-            "input": user_text,
-        }
-
-        if state["previous_response_id"]:
-            kwargs["previous_response_id"] = state["previous_response_id"]
-
-        response = client.responses.create(**kwargs)
-        state["previous_response_id"] = response.id
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            instructions=prompt_text(),
+            input=user_text
+        )
 
         text = (response.output_text or "").strip()
-
         data = json.loads(text)
         return data
 
     except Exception as e:
         print("GPT ERROR:", str(e))
         return {
-            "type": "clarify",
-            "offer": "unknown",
-            "message": "Я чувствую, что тут есть важный слой ✨ Опиши чуть подробнее, что именно тебя сейчас тревожит?"
+            "type": "recommendation",
+            "offer": "deep",
+            "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\nПотому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
         }
 
 
@@ -127,12 +140,7 @@ def handle_user_message(chat_id, user_id, text):
     result = ask_gpt(user_id, text)
 
     message = result.get("message", "Опиши чуть подробнее.")
-    result_type = result.get("type", "clarify")
-
-    if result_type == "recommendation":
-        send_message(chat_id, message, start_keyboard())
-    else:
-        send_message(chat_id, message)
+    send_message(chat_id, message, start_keyboard())
 
 
 def main():
@@ -158,7 +166,7 @@ def main():
                     send_message(
                         chat_id,
                         "Привет, я Madame Mira ✨\n\n"
-                        "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат тебе подойдет лучше.",
+                        "Опиши свою ситуацию одним сообщением — и я сразу скажу, какой формат тебе подойдет лучше.",
                         start_keyboard()
                     )
                 else:
@@ -174,17 +182,17 @@ def main():
                 if data == "basic":
                     send_message(
                         chat_id,
-                        "✨ Мини-разбор — $11\n\nПодходит, если тебе нужен быстрый и точный ответ на один главный вопрос."
+                        "✨ Мини-разбор — $11\n\nБыстрый и точный ответ на один вопрос."
                     )
                 elif data == "deep":
                     send_message(
                         chat_id,
-                        "🔮 Глубокий разбор — $29\n\nПодходит, если ситуация сложная, эмоциональная или многослойная."
+                        "🔮 Глубокий разбор — $29\n\nПолный разбор ситуации с пониманием причин и будущего."
                     )
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Напиши, что тебя сейчас больше всего волнует, и я подскажу, какой формат подойдет лучше 💬"
+                        "Опиши ситуацию, и я скажу, какой формат лучше 💬"
                     )
 
 
