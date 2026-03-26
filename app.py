@@ -43,6 +43,41 @@ def start_keyboard():
     }
 
 
+def choose_offer(user_text: str):
+    text = user_text.lower().strip()
+
+    deep_keywords = [
+        "отнош", "люб", "бывш", "муж", "жена", "развод", "предательство",
+        "измена", "чувства", "страх", "кризис", "сложно", "тяжело",
+        "не понимаю", "запуталась", "запутался", "выбор", "будущее",
+        "предназначение", "деньги", "работа", "путь", "энергия"
+    ]
+
+    basic_keywords = [
+        "быстро", "кратко", "один вопрос", "простой вопрос", "коротко", "мини"
+    ]
+
+    deep_score = 0
+    basic_score = 0
+
+    for word in deep_keywords:
+        if word in text:
+            deep_score += 1
+
+    for word in basic_keywords:
+        if word in text:
+            basic_score += 1
+
+    if len(text) > 120:
+        deep_score += 1
+
+    if deep_score >= 2:
+        return "deep"
+    if basic_score >= 1:
+        return "basic"
+    return "unknown"
+
+
 def main():
     global last_update_id
 
@@ -57,7 +92,6 @@ def main():
         for update in updates["result"]:
             last_update_id = update["update_id"] + 1
 
-            # Сообщения
             if "message" in update:
                 chat_id = update["message"]["chat"]["id"]
                 text = update["message"].get("text", "")
@@ -71,14 +105,31 @@ def main():
                         start_keyboard()
                     )
                 else:
-                    send_message(
-                        chat_id,
-                        "Я услышала тебя ✨\n\n"
-                        "Выбери вариант ниже или напиши подробнее:",
-                        start_keyboard()
-                    )
+                    offer = choose_offer(text)
 
-            # Нажатия кнопок
+                    if offer == "deep":
+                        send_message(
+                            chat_id,
+                            "Я чувствую, что здесь вопрос не поверхностный ✨\n\n"
+                            "Тебе больше подойдет 🔮 Глубокий разбор за $29.\n\n"
+                            "Он нужен, когда важно увидеть ситуацию шире и глубже.",
+                            start_keyboard()
+                        )
+                    elif offer == "basic":
+                        send_message(
+                            chat_id,
+                            "Здесь лучше подойдет ✨ Мини-разбор за $11.\n\n"
+                            "Он хорош, когда нужен быстрый и точный ответ на один главный вопрос.",
+                            start_keyboard()
+                        )
+                    else:
+                        send_message(
+                            chat_id,
+                            "Я услышала тебя ✨\n\n"
+                            "Могу предложить оба варианта, а ты почувствуешь, что тебе ближе:",
+                            start_keyboard()
+                        )
+
             elif "callback_query" in update:
                 query = update["callback_query"]
                 data = query["data"]
@@ -90,18 +141,18 @@ def main():
                     send_message(
                         chat_id,
                         "✨ Мини-разбор — $11\n\n"
-                        "Подходит, если тебе нужен быстрый ответ на один вопрос."
+                        "Подходит, если тебе нужен быстрый ответ на один главный вопрос."
                     )
                 elif data == "deep":
                     send_message(
                         chat_id,
                         "🔮 Глубокий разбор — $29\n\n"
-                        "Подходит, если ситуация сложная и хочется глубины."
+                        "Подходит, если ситуация сложная и хочется глубины, ясности и большего объема."
                     )
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Опиши свою ситуацию, и я помогу выбрать формат 💬"
+                        "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я подскажу, какой формат подойдет лучше 💬"
                     )
 
 
