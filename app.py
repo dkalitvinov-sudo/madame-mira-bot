@@ -10,7 +10,9 @@ URL = f"https://api.telegram.org/bot{TOKEN}/"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
-WAITING_FOR_DESCRIPTION = {}
+
+CRYPTO_11 = "https://t.me/send?start=IVhQvvzpJ7nd"
+CRYPTO_29 = "https://t.me/send?start=IVlbsVdZNwQK"
 
 
 def get_updates():
@@ -42,9 +44,37 @@ def answer_callback_query(callback_query_id):
 def start_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "✨ Мини-разбор $11", "callback_data": "basic"}],
-            [{"text": "🔮 Глубокий разбор $29", "callback_data": "deep"}],
-            [{"text": "💬 Помоги выбрать", "callback_data": "help"}]
+            [{"text": "✨ Мини-разбор $11", "callback_data": "basic_info"}],
+            [{"text": "🔮 Глубокий разбор $29", "callback_data": "deep_info"}],
+            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
+        ]
+    }
+
+
+def payment_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "💰 Оплатить $11 криптой", "url": CRYPTO_11}],
+            [{"text": "🔮 Оплатить $29 криптой", "url": CRYPTO_29}],
+            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
+        ]
+    }
+
+
+def payment_keyboard_for_offer(offer: str):
+    if offer == "basic":
+        return {
+            "inline_keyboard": [
+                [{"text": "💰 Оплатить $11 криптой", "url": CRYPTO_11}],
+                [{"text": "🔮 Выбрать глубокий $29", "callback_data": "deep_info"}],
+                [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
+            ]
+        }
+    return {
+        "inline_keyboard": [
+            [{"text": "🔮 Оплатить $29 криптой", "url": CRYPTO_29}],
+            [{"text": "✨ Выбрать мини $11", "callback_data": "basic_info"}],
+            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
         ]
     }
 
@@ -57,34 +87,38 @@ def prompt_text():
 - Мини-разбор — $11
 - Глубокий разбор — $29
 
-Твоя задача:
+Задача:
 1. Прочитать сообщение пользователя.
-2. Сразу выбрать ОДИН формат.
-3. Коротко объяснить, почему.
-4. Отвечать тепло, уверенно и по делу.
+2. Выбрать ОДИН формат.
+3. Очень коротко объяснить, почему.
+4. Говорить тепло, по делу, без воды.
+5. Не задавать уточняющих вопросов.
+6. Не предлагать оба варианта.
 
-Правила выбора:
-- Выбирай $29, если тема про отношения, мужа, парня, бывшего, измену, боль, предательство, сильные эмоции, путаницу, сложную ситуацию.
-- Выбирай $11, если вопрос короткий, простой, быстрый, один конкретный.
-- Не задавай уточняющих вопросов.
-- Не предлагай оба варианта.
-- Не меняй цены.
-- Не пиши длинно.
+Как выбирать:
+- Выбирай "deep", если тема про отношения, мужа, парня, бывшего, измену, предательство, сильные эмоции, боль, запутанность, сложную ситуацию.
+- Выбирай "basic", если вопрос короткий, простой, быстрый, один конкретный, без глубокого контекста.
 
-Верни строго JSON:
+Правила:
+- Нельзя менять цены.
+- Нельзя придумывать другие продукты.
+- Нельзя задавать уточнения.
+- Нельзя отвечать длинно.
+- Всегда выбери один вариант.
 
+Верни строго JSON такого вида:
 {
   "offer": "basic" or "deep",
   "message": "готовый текст для пользователя"
 }
 
-Пример для сложной ситуации:
+Пример для deep:
 {
   "offer": "deep",
-  "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
+  "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и здесь важно увидеть картину глубже."
 }
 
-Пример для простого вопроса:
+Пример для basic:
 {
   "offer": "basic",
   "message": "Я бы советовала тебе ✨ Мини-разбор за $11. Потому что здесь лучше подходит быстрый и точный ответ на один главный вопрос."
@@ -102,84 +136,21 @@ def ask_gpt(user_text: str):
 
         text = (response.output_text or "").strip()
         data = json.loads(text)
-        return data
 
-    except Exception as e:
-        print("GPT ERROR:", str(e))
+        offer = data.get("offer", "deep")
+        if offer not in ["basic", "deep"]:
+            offer = "deep"
+
+        message = data.get("message", "").strip()
+        if not message:
+            if offer == "basic":
+                message = "Я бы советовала тебе ✨ Мини-разбор за $11. Потому что здесь лучше подходит быстрый и точный ответ."
+            else:
+                message = "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
+
         return {
-            "offer": "deep",
-            "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
+            "offer": offer,
+            "message": message
         }
 
-
-def handle_user_message(chat_id, text):
-    result = ask_gpt(text)
-    message = result.get("message", "Я бы советовала тебе 🔮 Глубокий разбор за $29.")
-    send_message(chat_id, message, start_keyboard())
-
-
-def main():
-    global last_update_id
-
-    print("Bot started...")
-
-    while True:
-        updates = get_updates()
-
-        if "result" not in updates:
-            continue
-
-        for update in updates["result"]:
-            last_update_id = update["update_id"] + 1
-
-            if "message" in update:
-                chat_id = update["message"]["chat"]["id"]
-                user_id = update["message"]["from"]["id"]
-                text = update["message"].get("text", "").strip()
-
-                if not text:
-                    continue
-
-                if text == "/start":
-                    WAITING_FOR_DESCRIPTION[user_id] = False
-                    send_message(
-                        chat_id,
-                        "Привет, я Madame Mira ✨\n\nОпиши свою ситуацию одним сообщением, и я сразу скажу, какой формат тебе подойдет лучше.",
-                        start_keyboard()
-                    )
-                else:
-                    handle_user_message(chat_id, text)
-                    WAITING_FOR_DESCRIPTION[user_id] = False
-
-            elif "callback_query" in update:
-                query = update["callback_query"]
-                data = query["data"]
-                chat_id = query["message"]["chat"]["id"]
-                user_id = query["from"]["id"]
-
-                answer_callback_query(query["id"])
-
-                if data == "basic":
-                    WAITING_FOR_DESCRIPTION[user_id] = False
-                    send_message(
-                        chat_id,
-                        "✨ Мини-разбор — $11\n\nБыстрый и точный ответ на один главный вопрос."
-                    )
-
-                elif data == "deep":
-                    WAITING_FOR_DESCRIPTION[user_id] = False
-                    send_message(
-                        chat_id,
-                        "🔮 Глубокий разбор — $29\n\nПолный разбор ситуации с пониманием причин и дальнейшего движения."
-                    )
-
-                elif data == "help":
-                    WAITING_FOR_DESCRIPTION[user_id] = True
-                    send_message(
-                        chat_id,
-                        "Опиши ситуацию одним сообщением, и я скажу, какой формат подойдет лучше 💬"
-                    )
-
-
-if __name__ == "__main__":
-    main()
+    except Exception as e
