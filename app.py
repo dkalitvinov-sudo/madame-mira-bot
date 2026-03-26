@@ -2,6 +2,7 @@ import os
 import requests
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 
 last_update_id = None
@@ -28,6 +29,21 @@ def send_message(chat_id, text, reply_markup=None):
         payload["reply_markup"] = reply_markup
 
     requests.post(URL + "sendMessage", json=payload, timeout=30)
+
+
+def notify_admin(text):
+    if not ADMIN_CHAT_ID:
+        print("ADMIN_CHAT_ID not set")
+        return
+
+    requests.post(
+        URL + "sendMessage",
+        json={
+            "chat_id": ADMIN_CHAT_ID,
+            "text": text
+        },
+        timeout=30
+    )
 
 
 def answer_callback_query(callback_query_id):
@@ -130,6 +146,38 @@ def choose_offer(text: str):
     return "unknown"
 
 
+def finish_application(chat_id, user_id):
+    user = get_user_state(user_id)
+
+    if user["offer"] == "basic":
+        offer_text = "Мини-разбор $11"
+    elif user["offer"] == "deep":
+        offer_text = "Глубокий разбор $29"
+    else:
+        offer_text = "Не указан"
+
+    send_message(
+        chat_id,
+        "Заявка принята ✨\n\n"
+        f"Формат: {offer_text}\n"
+        f"Имя: {user['name']}\n\n"
+        "Я получила всё, что нужно для начала разбора 💫"
+    )
+
+    admin_text = (
+        "Новая заявка в Madame Mira 💸\n\n"
+        f"User ID: {user_id}\n"
+        f"Формат: {offer_text}\n"
+        f"Имя: {user['name']}\n\n"
+        f"Ситуация:\n{user['situation']}\n\n"
+        f"Что хочет понять:\n{user['question']}"
+    )
+
+    notify_admin(admin_text)
+
+    user["step"] = "done"
+
+
 def handle_user_message(chat_id, user_id, text):
     user = get_user_state(user_id)
 
@@ -147,21 +195,7 @@ def handle_user_message(chat_id, user_id, text):
 
     if user["step"] == "waiting_question":
         user["question"] = text
-        user["step"] = "done"
-
-        offer_text = "не указан"
-        if user["offer"] == "basic":
-            offer_text = "Мини-разбор $11"
-        elif user["offer"] == "deep":
-            offer_text = "Глубокий разбор $29"
-
-        send_message(
-            chat_id,
-            "Заявка принята ✨\n\n"
-            f"Формат: {offer_text}\n"
-            f"Имя: {user['name']}\n\n"
-            "Я получила всё, что нужно для начала разбора 💫"
-        )
+        finish_application(chat_id, user_id)
         return
 
     offer = choose_offer(text)
