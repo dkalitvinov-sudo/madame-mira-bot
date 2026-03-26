@@ -10,8 +10,6 @@ URL = f"https://api.telegram.org/bot{TOKEN}/"
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
-
-# простая память в процессе
 USER_STATE = {}
 
 
@@ -53,52 +51,44 @@ def start_keyboard():
 
 def get_user_state(user_id: int):
     if user_id not in USER_STATE:
-        USER_STATE[user_id] = {
-            "previous_response_id": None,
-            "last_offer": None
-        }
+        USER_STATE[user_id] = {"previous_response_id": None}
     return USER_STATE[user_id]
 
 
-def madame_mira_prompt():
+def prompt_text():
     return """
-Ты — Madame Mira, мягкий и умный Telegram-продажник разборов.
+Ты — Madame Mira, Telegram-консультант по продаже разборов.
+
+У тебя есть только 2 формата:
+- Мини-разбор — $11
+- Глубокий разбор — $29
 
 Твоя задача:
-1. Понять, что беспокоит человека.
-2. Порекомендовать один из двух форматов:
-   - Мини-разбор за $11
-   - Глубокий разбор за $29
-3. Коротко объяснить, почему советуешь именно его.
-4. Говорить тепло, уверенно, женственно, без кринжа и без лишней воды.
-5. Не показывать сразу оба варианта, если можешь уверенно выбрать один.
-6. Если данных мало, задай 1 уточняющий вопрос.
+1. Прочитать сообщение пользователя.
+2. Выбрать один формат, если уверена.
+3. Коротко объяснить, почему.
+4. Если уверенности мало, задать 1 уточняющий вопрос.
 
-Когда советовать $29:
+Когда чаще советовать $29:
 - отношения, муж, парень, бывший, измена, расставание
-- эмоционально тяжелая или многослойная ситуация
-- много контекста
-- человек запутан и хочет понять глубже
+- эмоционально тяжело
+- много слоев и контекста
+- пользователь запутан и хочет понять глубже
 
-Когда советовать $11:
+Когда чаще советовать $11:
 - один короткий вопрос
-- запрос на быстрый, краткий ответ
-- низкий порог входа
-- человек хочет попробовать формат
+- быстрый ответ
+- краткий формат
+- пользователь хочет попробовать
 
-Правила:
-- Никогда не меняй цены.
-- Не придумывай другие тарифы.
-- Не давай медицинских, юридических или финансовых гарантий.
-- Отвечай коротко.
-- Не пиши длинные простыни.
-- Не повторяй одно и то же в каждом сообщении.
+Пиши тепло, коротко, без воды.
+Никогда не меняй цены.
+Верни строго JSON такого вида:
 
-Верни только JSON в таком формате:
 {
-  "type": "recommendation" | "clarify",
-  "offer": "basic" | "deep" | "unknown",
-  "message": "текст ответа пользователю"
+  "type": "recommendation" or "clarify",
+  "offer": "basic" or "deep" or "unknown",
+  "message": "текст для пользователя"
 }
 """.strip()
 
@@ -106,40 +96,38 @@ def madame_mira_prompt():
 def ask_gpt(user_id: int, user_text: str):
     state = get_user_state(user_id)
 
-    kwargs = {
-        "model": "gpt-5.4",
-        "instructions": madame_mira_prompt(),
-        "input": user_text
-    }
-
-    if state["previous_response_id"]:
-        kwargs["previous_response_id"] = state["previous_response_id"]
-
-    response = client.responses.create(**kwargs)
-    state["previous_response_id"] = response.id
-
-    text = getattr(response, "output_text", "").strip()
-
     try:
+        kwargs = {
+            "model": "gpt-4.1-mini",
+            "instructions": prompt_text(),
+            "input": user_text,
+        }
+
+        if state["previous_response_id"]:
+            kwargs["previous_response_id"] = state["previous_response_id"]
+
+        response = client.responses.create(**kwargs)
+        state["previous_response_id"] = response.id
+
+        text = (response.output_text or "").strip()
+
         data = json.loads(text)
         return data
-    except Exception:
+
+    except Exception as e:
+        print("GPT ERROR:", str(e))
         return {
             "type": "clarify",
             "offer": "unknown",
-            "message": "Я чувствую, что здесь есть важный слой ✨ Расскажи чуть подробнее, что именно болит в этой ситуации?"
+            "message": "Я чувствую, что тут есть важный слой ✨ Опиши чуть подробнее, что именно тебя сейчас тревожит?"
         }
 
 
 def handle_user_message(chat_id, user_id, text):
     result = ask_gpt(user_id, text)
 
-    message = result.get("message", "Расскажи чуть подробнее.")
-    offer = result.get("offer", "unknown")
+    message = result.get("message", "Опиши чуть подробнее.")
     result_type = result.get("type", "clarify")
-
-    state = get_user_state(user_id)
-    state["last_offer"] = offer
 
     if result_type == "recommendation":
         send_message(chat_id, message, start_keyboard())
@@ -170,7 +158,7 @@ def main():
                     send_message(
                         chat_id,
                         "Привет, я Madame Mira ✨\n\n"
-                        "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат разбора тебе подойдет лучше.",
+                        "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат тебе подойдет лучше.",
                         start_keyboard()
                     )
                 else:
@@ -186,19 +174,17 @@ def main():
                 if data == "basic":
                     send_message(
                         chat_id,
-                        "✨ Мини-разбор — $11\n\n"
-                        "Подходит, если тебе нужен быстрый и точный ответ на один главный вопрос."
+                        "✨ Мини-разбор — $11\n\nПодходит, если тебе нужен быстрый и точный ответ на один главный вопрос."
                     )
                 elif data == "deep":
                     send_message(
                         chat_id,
-                        "🔮 Глубокий разбор — $29\n\n"
-                        "Подходит, если ситуация сложная, эмоциональная или многослойная и хочется увидеть её глубже."
+                        "🔮 Глубокий разбор — $29\n\nПодходит, если ситуация сложная, эмоциональная или многослойная."
                     )
                 elif data == "help":
                     send_message(
                         chat_id,
-                        "Напиши одним сообщением, что тебя сейчас больше всего волнует. Я не просто покажу вариант, а объясню, почему советую именно его 💬"
+                        "Напиши, что тебя сейчас больше всего волнует, и я подскажу, какой формат подойдет лучше 💬"
                     )
 
 
