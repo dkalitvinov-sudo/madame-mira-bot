@@ -1,13 +1,8 @@
 import os
-import json
 import requests
-from openai import OpenAI
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 URL = f"https://api.telegram.org/bot{TOKEN}/"
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
 
@@ -51,16 +46,6 @@ def start_keyboard():
     }
 
 
-def payment_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "💰 Оплатить $11 криптой", "url": CRYPTO_11}],
-            [{"text": "🔮 Оплатить $29 криптой", "url": CRYPTO_29}],
-            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
-        ]
-    }
-
-
 def payment_keyboard_for_offer(offer: str):
     if offer == "basic":
         return {
@@ -70,6 +55,7 @@ def payment_keyboard_for_offer(offer: str):
                 [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
             ]
         }
+
     return {
         "inline_keyboard": [
             [{"text": "🔮 Оплатить $29 криптой", "url": CRYPTO_29}],
@@ -79,78 +65,137 @@ def payment_keyboard_for_offer(offer: str):
     }
 
 
-def prompt_text():
-    return """
-Ты — Madame Mira, уверенный Telegram-продажник разборов.
+def choose_offer(text: str):
+    t = text.lower().strip()
 
-У тебя есть только 2 варианта:
-- Мини-разбор — $11
-- Глубокий разбор — $29
+    deep_keywords = [
+        "отнош", "парень", "муж", "бывш", "измен", "предал", "предательство",
+        "ушел", "ушёл", "другая", "другой", "любов", "чувства", "больно",
+        "сложно", "тяжело", "кризис", "развод", "расстав", "ревность",
+        "запутал", "запуталась", "запутался", "не понимаю", "что делать",
+        "будущее", "судьба", "энергия", "выбор"
+    ]
 
-Задача:
-1. Прочитать сообщение пользователя.
-2. Выбрать ОДИН формат.
-3. Очень коротко объяснить, почему.
-4. Говорить тепло, по делу, без воды.
-5. Не задавать уточняющих вопросов.
-6. Не предлагать оба варианта.
+    basic_keywords = [
+        "быстро", "кратко", "коротко", "мини", "один вопрос",
+        "простой вопрос", "быстрый ответ"
+    ]
 
-Как выбирать:
-- Выбирай "deep", если тема про отношения, мужа, парня, бывшего, измену, предательство, сильные эмоции, боль, запутанность, сложную ситуацию.
-- Выбирай "basic", если вопрос короткий, простой, быстрый, один конкретный, без глубокого контекста.
+    deep_score = 0
+    basic_score = 0
 
-Правила:
-- Нельзя менять цены.
-- Нельзя придумывать другие продукты.
-- Нельзя задавать уточнения.
-- Нельзя отвечать длинно.
-- Всегда выбери один вариант.
+    for word in deep_keywords:
+        if word in t:
+            deep_score += 1
 
-Верни строго JSON такого вида:
-{
-  "offer": "basic" or "deep",
-  "message": "готовый текст для пользователя"
-}
+    for word in basic_keywords:
+        if word in t:
+            basic_score += 1
 
-Пример для deep:
-{
-  "offer": "deep",
-  "message": "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и здесь важно увидеть картину глубже."
-}
+    if len(t) > 80:
+        deep_score += 1
 
-Пример для basic:
-{
-  "offer": "basic",
-  "message": "Я бы советовала тебе ✨ Мини-разбор за $11. Потому что здесь лучше подходит быстрый и точный ответ на один главный вопрос."
-}
-""".strip()
+    if deep_score >= 2 and deep_score > basic_score:
+        return "deep"
+
+    if basic_score >= 1 and basic_score >= deep_score:
+        return "basic"
+
+    return "unknown"
 
 
-def ask_gpt(user_text: str):
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            instructions=prompt_text(),
-            input=user_text
+def handle_user_message(chat_id, text):
+    offer = choose_offer(text)
+
+    if offer == "basic":
+        send_message(
+            chat_id,
+            "Я бы советовала тебе ✨ Мини-разбор за $11.\n\n"
+            "Потому что здесь лучше подходит быстрый и точный ответ на один главный вопрос.",
+            payment_keyboard_for_offer("basic")
         )
 
-        text = (response.output_text or "").strip()
-        data = json.loads(text)
+    elif offer == "deep":
+        send_message(
+            chat_id,
+            "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\n"
+            "Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора.",
+            payment_keyboard_for_offer("deep")
+        )
 
-        offer = data.get("offer", "deep")
-        if offer not in ["basic", "deep"]:
-            offer = "deep"
+    else:
+        send_message(
+            chat_id,
+            "Я услышала тебя ✨\n\n"
+            "Пока здесь лучше выбрать формат вручную:",
+            start_keyboard()
+        )
 
-        message = data.get("message", "").strip()
-        if not message:
-            if offer == "basic":
-                message = "Я бы советовала тебе ✨ Мини-разбор за $11. Потому что здесь лучше подходит быстрый и точный ответ."
-            else:
-                message = "Я бы советовала тебе 🔮 Глубокий разбор за $29. Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
 
-        return {
-            "offer": offer,
-            "message": message
-        }
+def main():
+    global last_update_id
 
-    except Exception as e
+    print("Bot started...")
+
+    while True:
+        try:
+            updates = get_updates()
+
+            if "result" not in updates:
+                continue
+
+            for update in updates["result"]:
+                last_update_id = update["update_id"] + 1
+
+                if "message" in update:
+                    chat_id = update["message"]["chat"]["id"]
+                    text = update["message"].get("text", "").strip()
+
+                    if not text:
+                        continue
+
+                    if text == "/start":
+                        send_message(
+                            chat_id,
+                            "Привет, я Madame Mira ✨\n\n"
+                            "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат тебе подойдет лучше.",
+                            start_keyboard()
+                        )
+                    else:
+                        handle_user_message(chat_id, text)
+
+                elif "callback_query" in update:
+                    query = update["callback_query"]
+                    data = query["data"]
+                    chat_id = query["message"]["chat"]["id"]
+
+                    answer_callback_query(query["id"])
+
+                    if data == "basic_info":
+                        send_message(
+                            chat_id,
+                            "✨ Мини-разбор — $11\n\n"
+                            "Быстрый и точный ответ на один главный вопрос.",
+                            payment_keyboard_for_offer("basic")
+                        )
+
+                    elif data == "deep_info":
+                        send_message(
+                            chat_id,
+                            "🔮 Глубокий разбор — $29\n\n"
+                            "Полный разбор ситуации с пониманием причин и дальнейшего движения.",
+                            payment_keyboard_for_offer("deep")
+                        )
+
+                    elif data == "help_pick":
+                        send_message(
+                            chat_id,
+                            "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я помогу выбрать формат 💬"
+                        )
+
+        except Exception as e:
+            print("RUNTIME ERROR:", str(e))
+
+
+if __name__ == "__main__":
+    main()
