@@ -9,6 +9,8 @@ last_update_id = None
 CRYPTO_11 = "https://t.me/send?start=IVhQvvzpJ7nd"
 CRYPTO_29 = "https://t.me/send?start=IVlbsVdZNwQK"
 
+USER_STATE = {}
+
 
 def get_updates():
     global last_update_id
@@ -67,6 +69,28 @@ def payment_keyboard_for_offer(offer: str):
     }
 
 
+def get_user_state(user_id):
+    if user_id not in USER_STATE:
+        USER_STATE[user_id] = {
+            "step": None,
+            "offer": None,
+            "name": "",
+            "situation": "",
+            "question": ""
+        }
+    return USER_STATE[user_id]
+
+
+def reset_user_form(user_id):
+    USER_STATE[user_id] = {
+        "step": None,
+        "offer": None,
+        "name": "",
+        "situation": "",
+        "question": ""
+    }
+
+
 def choose_offer(text: str):
     t = text.lower().strip()
 
@@ -106,10 +130,52 @@ def choose_offer(text: str):
     return "unknown"
 
 
-def handle_user_message(chat_id, text):
+def handle_user_message(chat_id, user_id, text):
+    user = get_user_state(user_id)
+
+    # Сбор заявки после оплаты
+    if user["step"] == "waiting_name":
+        user["name"] = text
+        user["step"] = "waiting_situation"
+        send_message(
+            chat_id,
+            "Приняла 💫\n\nТеперь коротко опиши свою ситуацию."
+        )
+        return
+
+    if user["step"] == "waiting_situation":
+        user["situation"] = text
+        user["step"] = "waiting_question"
+        send_message(
+            chat_id,
+            "Хорошо.\n\nТеперь напиши, что именно ты хочешь понять или узнать в этом разборе."
+        )
+        return
+
+    if user["step"] == "waiting_question":
+        user["question"] = text
+        user["step"] = "done"
+
+        offer_text = "не указан"
+        if user["offer"] == "basic":
+            offer_text = "Мини-разбор $11"
+        elif user["offer"] == "deep":
+            offer_text = "Глубокий разбор $29"
+
+        send_message(
+            chat_id,
+            "Заявка принята ✨\n\n"
+            f"Формат: {offer_text}\n"
+            f"Имя: {user['name']}\n\n"
+            "Я получила всё, что нужно для начала разбора 💫"
+        )
+        return
+
+    # Обычная логика выбора тарифа
     offer = choose_offer(text)
 
     if offer == "basic":
+        user["offer"] = "basic"
         send_message(
             chat_id,
             "Я бы советовала тебе ✨ Мини-разбор за $11.\n\n"
@@ -118,6 +184,7 @@ def handle_user_message(chat_id, text):
         )
 
     elif offer == "deep":
+        user["offer"] = "deep"
         send_message(
             chat_id,
             "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\n"
@@ -151,12 +218,14 @@ def main():
 
                 if "message" in update:
                     chat_id = update["message"]["chat"]["id"]
+                    user_id = update["message"]["from"]["id"]
                     text = update["message"].get("text", "").strip()
 
                     if not text:
                         continue
 
                     if text == "/start":
+                        reset_user_form(user_id)
                         send_message(
                             chat_id,
                             "Привет, я Madame Mira ✨\n\n"
@@ -164,16 +233,20 @@ def main():
                             start_keyboard()
                         )
                     else:
-                        handle_user_message(chat_id, text)
+                        handle_user_message(chat_id, user_id, text)
 
                 elif "callback_query" in update:
                     query = update["callback_query"]
                     data = query["data"]
                     chat_id = query["message"]["chat"]["id"]
+                    user_id = query["from"]["id"]
+
+                    user = get_user_state(user_id)
 
                     answer_callback_query(query["id"])
 
                     if data == "basic_info":
+                        user["offer"] = "basic"
                         send_message(
                             chat_id,
                             "✨ Мини-разбор — $11\n\n"
@@ -182,6 +255,7 @@ def main():
                         )
 
                     elif data == "deep_info":
+                        user["offer"] = "deep"
                         send_message(
                             chat_id,
                             "🔮 Глубокий разбор — $29\n\n"
@@ -196,14 +270,12 @@ def main():
                         )
 
                     elif data == "paid":
+                        user["step"] = "waiting_name"
                         send_message(
                             chat_id,
                             "Приняла оплату ✨\n\n"
-                            "Теперь пришли одним сообщением:\n\n"
-                            "1. Твоё имя\n"
-                            "2. Ситуацию\n"
-                            "3. Что именно хочешь понять\n\n"
-                            "После этого можно начинать разбор 💫"
+                            "Давай соберем заявку по шагам.\n\n"
+                            "Сначала напиши своё имя."
                         )
 
         except Exception as e:
