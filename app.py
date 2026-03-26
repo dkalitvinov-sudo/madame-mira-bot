@@ -1,12 +1,17 @@
 import os
+import json
 import requests
+from openai import OpenAI
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 URL = f"https://api.telegram.org/bot{TOKEN}/"
 CRYPTO_API_URL = "https://pay.crypt.bot/api"
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 last_update_id = None
 USER_STATE = {}
@@ -53,7 +58,9 @@ def get_user_state(user_id):
             "situation": "",
             "question": "",
             "invoice_id": None,
-            "invoice_url": None
+            "invoice_url": None,
+            "initial_text": "",
+            "clarify_question": ""
         }
     return USER_STATE[user_id]
 
@@ -66,7 +73,9 @@ def reset_user_form(user_id):
         "situation": "",
         "question": "",
         "invoice_id": None,
-        "invoice_url": None
+        "invoice_url": None,
+        "initial_text": "",
+        "clarify_question": ""
     }
 
 
@@ -90,7 +99,7 @@ def payment_keyboard(invoice_url):
     }
 
 
-def choose_offer(text: str):
+def choose_offer_local(text: str):
     t = text.lower().strip()
 
     deep_keywords = [
@@ -129,43 +138,161 @@ def choose_offer(text: str):
     return "unknown"
 
 
+def gpt_clarify(user_text: str):
+    if not client:
+        return {
+            "message": "Я чувствую, что в этой истории есть важный узел ✨\n\nСкажи, тебе сейчас важнее понять, что чувствует другой человек, или куда всё вообще движется?"
+        }
+
+    prompt = f"""
+Ты — Madame Mira. Стиль: мистический, женственный, мягкий, но без перебора.
+Нужно ответить на сообщение пользователя очень тепло и коротко.
+Задача:
+1. Сначала показать, что ты почувствовала ситуацию.
+2. Потом задать ОДИН уточняющий вопрос.
+3. Не предлагать оплату.
+4. Не упоминать цены.
+5. Не писать длинно.
+6. Отвечать на русском.
+
+Верни строго JSON:
+{{
+  "message": "готовый текст пользователю"
+}}
+
+Сообщение пользователя:
+{user_text}
+""".strip()
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
+        data = json.loads((response.output_text or "").strip())
+        if data.get("message"):
+            return data
+    except Exception as e:
+        print("GPT CLARIFY ERROR:", str(e))
+
+    return {
+        "message": "Я чувствую, что здесь много непроговорённого ✨\n\nСкажи, тебе сейчас важнее понять чувства другого человека или увидеть, куда всё движется?"
+    }
+
+
+def gpt_recommend(initial_text: str, clarify_reply: str):
+    combined = f"Первое сообщение: {initial_text}\nОтвет на уточнение: {clarify_reply}"
+
+    if not client:
+        offer = choose_offer_local(initial_text + " " + clarify_reply)
+        if offer == "basic":
+            return {
+                "offer": "basic",
+                "message": "Я бы сейчас советовала тебе ✨ Мини-разбор за $11.\n\nЗдесь важен быстрый, точный ответ на один главный вопрос."
+            }
+        return {
+            "offer": "deep",
+            "message": "Я бы сейчас советовала тебе 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целый узел эмоций и смысла."
+        }
+
+    prompt = f"""
+Ты — Madame Mira. Стиль: мистический, женственный, мягкий, уверенный.
+Нужно после короткого диалога порекомендовать ОДИН формат:
+- basic = Мини-разбор $11
+- deep = Глубокий разбор $29
+
+Правила:
+1. Не предлагай оба варианта.
+2. Говори тепло и красиво, но не длинно.
+3. Объясни, почему именно этот формат.
+4. Если тема про отношения, измену, боль, запутанность, сильные чувства, много контекста, почти всегда выбирай deep.
+5. Если вопрос простой, короткий, один, выбирай basic.
+6. Отвечай на русском.
+
+Верни строго JSON:
+{{
+  "offer": "basic" или "deep",
+  "message": "готовый текст пользователю"
+}}
+
+Диалог:
+{combined}
+""".strip()
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
+        data = json.loads((response.output_text or "").strip())
+        offer = data.get("offer", "deep")
+        message = data.get("message", "")
+
+        if offer not in ["basic", "deep"]:
+            offer = "deep"
+
+        if not message:
+            if offer == "basic":
+                message = "Я бы сейчас советовала тебе ✨ Мини-разбор за $11.\n\nЗдесь важен быстрый, точный ответ на один главный вопрос."
+            else:
+                message = "Я бы сейчас советовала тебе 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целый узел эмоций и смысла."
+
+        return {"offer": offer, "message": message}
+    except Exception as e:
+        print("GPT RECOMMEND ERROR:", str(e))
+
+    offer = choose_offer_local(initial_text + " " + clarify_reply)
+    if offer == "basic":
+        return {
+            "offer": "basic",
+            "message": "Я бы сейчас советовала тебе ✨ Мини-разбор за $11.\n\nЗдесь важен быстрый, точный ответ на один главный вопрос."
+        }
+
+    return {
+        "offer": "deep",
+        "message": "Я бы сейчас советовала тебе 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целый узел эмоций и смысла."
+    }
+
+
 def create_crypto_invoice(user_id, offer):
     if not CRYPTO_PAY_TOKEN:
         print("CRYPTO_PAY_TOKEN not set")
         return None
 
     amount = "11" if offer == "basic" else "29"
-    description = "Мини-разбор" if offer == "basic" else "Глубокий разбор"
+    description = "Mini" if offer == "basic" else "Deep"
     payload_value = f"user_{user_id}_{offer}"
-
-    headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
-    data = {
-        "asset": "USDT",
-        "amount": amount,
-        "description": description,
-        "payload": payload_value
-    }
 
     try:
         response = requests.post(
             f"{CRYPTO_API_URL}/createInvoice",
-            headers=headers,
-            json=data,
+            headers={
+                "Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN,
+                "Content-Type": "application/json"
+            },
+            json={
+                "asset": "USDT",
+                "amount": amount,
+                "description": description,
+                "payload": payload_value
+            },
             timeout=30
         )
-        result = response.json()
 
-        if not result.get("ok"):
-            print("CRYPTO createInvoice error:", result)
+        print("CRYPTO CREATE:", response.text)
+        data = response.json()
+
+        if not data.get("ok"):
+            print("CRYPTO CREATE ERROR:", data)
             return None
 
-        invoice = result["result"]
+        result = data["result"]
         return {
-            "invoice_id": invoice["invoice_id"],
-            "invoice_url": invoice["bot_invoice_url"]
+            "invoice_id": result["invoice_id"],
+            "invoice_url": result["bot_invoice_url"]
         }
     except Exception as e:
-        print("CRYPTO createInvoice exception:", str(e))
+        print("CRYPTO CREATE EXCEPTION:", str(e))
         return None
 
 
@@ -173,29 +300,28 @@ def get_invoice_status(invoice_id):
     if not CRYPTO_PAY_TOKEN or not invoice_id:
         return None
 
-    headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
-    params = {"invoice_ids": str(invoice_id)}
-
     try:
         response = requests.get(
             f"{CRYPTO_API_URL}/getInvoices",
-            headers=headers,
-            params=params,
+            headers={"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN},
+            params={"invoice_ids": str(invoice_id)},
             timeout=30
         )
-        result = response.json()
 
-        if not result.get("ok"):
-            print("CRYPTO getInvoices error:", result)
+        print("CRYPTO STATUS:", response.text)
+        data = response.json()
+
+        if not data.get("ok"):
+            print("CRYPTO STATUS ERROR:", data)
             return None
 
-        items = result["result"]["items"]
+        items = data["result"]["items"]
         if not items:
             return None
 
         return items[0].get("status")
     except Exception as e:
-        print("CRYPTO getInvoices exception:", str(e))
+        print("CRYPTO STATUS EXCEPTION:", str(e))
         return None
 
 
@@ -215,18 +341,14 @@ def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     if not invoice:
         send_message(
             chat_id,
-            "Не получилось создать счёт 😔 Попробуй ещё раз через минуту."
+            "Не получилось создать счёт 😔\n\nПопробуй ещё раз через минуту."
         )
         return
 
     user["invoice_id"] = invoice["invoice_id"]
     user["invoice_url"] = invoice["invoice_url"]
 
-    send_message(
-        chat_id,
-        intro_text,
-        payment_keyboard(invoice["invoice_url"])
-    )
+    send_message(chat_id, intro_text, payment_keyboard(invoice["invoice_url"]))
 
 
 def finish_application(chat_id, user_id):
@@ -261,13 +383,19 @@ def handle_user_message(chat_id, user_id, text):
     if user["step"] == "waiting_name":
         user["name"] = text
         user["step"] = "waiting_situation"
-        send_message(chat_id, "Приняла 💫\n\nТеперь коротко опиши свою ситуацию.")
+        send_message(
+            chat_id,
+            "Приняла 💫\n\nТеперь коротко опиши свою ситуацию."
+        )
         return
 
     if user["step"] == "waiting_situation":
         user["situation"] = text
         user["step"] = "waiting_question"
-        send_message(chat_id, "Хорошо.\n\nТеперь напиши, что именно ты хочешь понять или узнать в этом разборе.")
+        send_message(
+            chat_id,
+            "Хорошо.\n\nТеперь напиши, что именно ты хочешь понять или узнать в этом разборе."
+        )
         return
 
     if user["step"] == "waiting_question":
@@ -275,32 +403,21 @@ def handle_user_message(chat_id, user_id, text):
         finish_application(chat_id, user_id)
         return
 
-    offer = choose_offer(text)
+    if user["step"] == "waiting_clarify":
+        result = gpt_recommend(user["initial_text"], text)
+        offer = result["offer"]
+        message = result["message"]
 
-    if offer == "basic":
-        send_offer_with_invoice(
-            chat_id,
-            user_id,
-            "basic",
-            "Я бы советовала тебе ✨ Мини-разбор за $11.\n\n"
-            "Потому что здесь лучше подходит быстрый и точный ответ на один главный вопрос."
-        )
+        user["step"] = "offer_ready"
+        send_offer_with_invoice(chat_id, user_id, offer, message)
+        return
 
-    elif offer == "deep":
-        send_offer_with_invoice(
-            chat_id,
-            user_id,
-            "deep",
-            "Я бы советовала тебе 🔮 Глубокий разбор за $29.\n\n"
-            "Потому что ситуация выглядит эмоционально сложной и требует более глубокого разбора."
-        )
-
-    else:
-        send_message(
-            chat_id,
-            "Я услышала тебя ✨\n\nПока здесь лучше выбрать формат вручную:",
-            start_keyboard()
-        )
+    # первый вход в диалог
+    user["initial_text"] = text
+    clarify = gpt_clarify(text)
+    user["clarify_question"] = clarify["message"]
+    user["step"] = "waiting_clarify"
+    send_message(chat_id, clarify["message"])
 
 
 def main():
@@ -331,7 +448,7 @@ def main():
                         send_message(
                             chat_id,
                             "Привет, я Madame Mira ✨\n\n"
-                            "Опиши свою ситуацию одним сообщением, и я подскажу, какой формат тебе подойдет лучше.",
+                            "Расскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу понять, какой формат подойдёт лучше.",
                             start_keyboard()
                         )
                     else:
@@ -347,27 +464,31 @@ def main():
                     answer_callback_query(query["id"])
 
                     if data == "basic_info":
+                        user["offer"] = "basic"
                         send_offer_with_invoice(
                             chat_id,
                             user_id,
                             "basic",
                             "✨ Мини-разбор — $11\n\n"
-                            "Быстрый и точный ответ на один главный вопрос."
+                            "Он подойдёт, если тебе нужен быстрый и точный ответ на один главный вопрос."
                         )
 
                     elif data == "deep_info":
+                        user["offer"] = "deep"
                         send_offer_with_invoice(
                             chat_id,
                             user_id,
                             "deep",
                             "🔮 Глубокий разбор — $29\n\n"
-                            "Полный разбор ситуации с пониманием причин и дальнейшего движения."
+                            "Он подойдёт, если в ситуации много чувств, подтекста и важно увидеть картину глубже."
                         )
 
                     elif data == "help_pick":
+                        user["step"] = None
+                        user["initial_text"] = ""
                         send_message(
                             chat_id,
-                            "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я помогу выбрать формат 💬"
+                            "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
                         )
 
                     elif data == "check_payment":
@@ -378,20 +499,20 @@ def main():
                             send_message(
                                 chat_id,
                                 "Оплату вижу ✅\n\n"
-                                "Давай соберем заявку по шагам.\n\n"
+                                "Теперь давай спокойно соберём заявку.\n\n"
                                 "Сначала напиши своё имя."
                             )
                         elif status in ["active", "pending"]:
                             send_message(
                                 chat_id,
-                                "Я пока не вижу завершённую оплату 👀\n\n"
-                                "Если ты уже оплатил(а), подожди немного и нажми «Проверить оплату» ещё раз."
+                                "Я ещё не вижу подтверждённую оплату ✨\n\n"
+                                "Если ты уже оплатил(а), подожди 10–20 секунд и нажми «Проверить оплату» ещё раз."
                             )
                         else:
                             send_message(
                                 chat_id,
-                                "Не получилось подтвердить оплату.\n\n"
-                                "Попробуй создать счёт заново или напиши позже."
+                                "Пока не получилось подтвердить оплату.\n\n"
+                                "Попробуй открыть счёт ещё раз или вернись чуть позже."
                             )
 
         except Exception as e:
