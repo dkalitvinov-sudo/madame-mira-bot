@@ -8,7 +8,7 @@ CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-URL = f"https://api.telegram.org/bot{TOKEN}/"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TOKEN}"
 CRYPTO_API_URL = "https://pay.crypt.bot/api"
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
@@ -20,22 +20,26 @@ USER_STATE = {}
 def get_updates():
     global last_update_id
     params = {"timeout": 100, "offset": last_update_id}
-    response = requests.get(URL + "getUpdates", params=params, timeout=120)
+    response = requests.get(f"{TELEGRAM_API_URL}/getUpdates", params=params, timeout=120)
     return response.json()
 
 
 def send_message(chat_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    requests.post(URL + "sendMessage", json=payload, timeout=30)
+
+    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
 
 
 def answer_callback_query(callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
-    requests.post(URL + "answerCallbackQuery", json=payload, timeout=30)
+    requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json=payload, timeout=30)
 
 
 def notify_admin(text):
@@ -44,7 +48,7 @@ def notify_admin(text):
         return
 
     requests.post(
-        URL + "sendMessage",
+        f"{TELEGRAM_API_URL}/sendMessage",
         json={"chat_id": ADMIN_CHAT_ID, "text": text},
         timeout=30
     )
@@ -61,7 +65,8 @@ def get_user_state(user_id):
             "invoice_id": None,
             "invoice_url": None,
             "initial_text": "",
-            "second_reply": ""
+            "reply_1": "",
+            "reply_2": ""
         }
     return USER_STATE[user_id]
 
@@ -76,14 +81,16 @@ def reset_user_form(user_id):
         "invoice_id": None,
         "invoice_url": None,
         "initial_text": "",
-        "second_reply": ""
+        "reply_1": "",
+        "reply_2": ""
     }
 
 
-def hidden_menu_keyboard():
+def formats_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "✨ Посмотреть форматы", "callback_data": "show_formats"}],
+            [{"text": "✨ Мини-разбор $11", "callback_data": "basic_info"}],
+            [{"text": "🔮 Глубокий разбор $29", "callback_data": "deep_info"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
         ]
     }
@@ -108,7 +115,7 @@ def choose_offer_local(text: str):
         "сложно", "тяжело", "кризис", "развод", "расстав", "ревность",
         "запутал", "запуталась", "запутался", "не понимаю", "что делать",
         "будущее", "судьба", "энергия", "выбор", "подруга", "треугольник",
-        "бросил", "одиночество"
+        "бросил", "одиночество", "не складываются", "страдаю", "потеряла"
     ]
 
     basic_keywords = [
@@ -127,7 +134,7 @@ def choose_offer_local(text: str):
         if word in t:
             basic_score += 1
 
-    if len(t) > 80:
+    if len(t) > 90:
         deep_score += 1
 
     if deep_score >= 2 and deep_score > basic_score:
@@ -139,26 +146,39 @@ def choose_offer_local(text: str):
     return "deep"
 
 
-def gpt_first_reply(user_text: str):
+def gpt_json(prompt, fallback):
     if not client:
-        return {
-            "message": "Я чувствую, что за этими словами стоит не просто вопрос, а живая внутренняя боль ✨\n\nСкажи, что сейчас ранит сильнее: сама потеря человека или чувство, что ты не понимаешь, что между вами осталось?"
-        }
+        return fallback
 
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
+        text = (response.output_text or "").strip()
+        data = json.loads(text)
+        return data
+    except Exception as e:
+        print("GPT ERROR:", str(e))
+        return fallback
+
+
+def gpt_first_reply(user_text: str):
     prompt = f"""
 Ты — Madame Mira.
-Стиль: женственный, мягкий, мистический, дорогой, но естественный.
+Стиль: женственный, мистический, мягкий, дорогой, тёплый, но естественный.
 
-Нужно написать ПЕРВОЕ сообщение в диалоге.
+Нужно написать ПЕРВОЕ сообщение после того, как человек поделился ситуацией.
 
 Правила:
-1. Мягко отрази состояние человека.
-2. Задай ОДИН тёплый уточняющий вопрос.
-3. НЕ предлагай услуги.
-4. НЕ упоминай цены.
-5. НЕ показывай кнопки.
+1. Покажи, что ты почувствовала его состояние.
+2. Дай короткий эффект "я тебя вижу".
+3. Задай ОДИН тёплый вопрос.
+4. Не продавай.
+5. Не упоминай оплату, цены, форматы.
 6. Коротко, красиво, по-человечески.
 7. На русском.
+8. Не используй списки.
 
 Верни строго JSON:
 {{
@@ -169,114 +189,108 @@ def gpt_first_reply(user_text: str):
 {user_text}
 """.strip()
 
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
-        data = json.loads((response.output_text or "").strip())
-        if data.get("message"):
-            return data
-    except Exception as e:
-        print("GPT FIRST ERROR:", str(e))
-
-    return {
-        "message": "Я чувствую, что за этим сообщением стоит не только вопрос, но и усталость сердца ✨\n\nСкажи, тебе сейчас важнее понять чувства другого человека или разобраться, что делать дальше?"
+    fallback = {
+        "message": "Я чувствую, что за этими словами стоит не просто вопрос, а внутренняя усталость сердца ✨\n\nСкажи, что задевает тебя сильнее: сама ситуация или чувство, что ты не понимаешь, куда всё движется?"
     }
 
+    return gpt_json(prompt, fallback)
 
-def gpt_second_reply(initial_text: str, first_answer: str):
-    if not client:
-        return {
-            "message": "Я тебя чувствую ✨\n\nЗдесь уже видно не просто переживание, а узел, который тянется глубже.\n\nСкажи, тебе важнее понять, есть ли будущее у этой истории, или как перестать терять себя в ней?"
-        }
 
+def gpt_second_reply(initial_text: str, reply_1: str):
     prompt = f"""
 Ты — Madame Mira.
-Стиль: женственный, мистический, мягкий, живой, премиальный.
+Стиль: женственный, мистический, мягкий, чувственный, живой.
 
 Нужно написать ВТОРОЕ сообщение в диалоге.
 У тебя уже есть:
-1. первое сообщение клиента
-2. его ответ на первый вопрос
+1. первое сообщение человека
+2. его ответ на твой первый вопрос
 
 Задача:
-1. Мягко углубить разговор
-2. Показать, что ты почувствовала суть
-3. Задать ЕЩЁ ОДИН короткий вопрос
-4. НЕ продавать
-5. НЕ упоминать оплату
-6. НЕ показывать варианты
-7. Коротко и красиво
-8. На русском
+1. Мягко углубить контакт.
+2. Дать ощущение, что ты считываешь суть.
+3. Добавить лёгкий "эффект угадывания", но без перебора.
+4. Задать ЕЩЁ ОДИН короткий вопрос.
+5. Не продавать.
+6. Не упоминать услуги, форматы, цены.
+7. На русском.
+8. Коротко и красиво.
 
 Верни строго JSON:
 {{
   "message": "текст"
 }}
 
-Первое сообщение клиента:
+Первое сообщение:
 {initial_text}
 
-Ответ клиента:
-{first_answer}
+Ответ человека:
+{reply_1}
 """.strip()
 
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
-        data = json.loads((response.output_text or "").strip())
-        if data.get("message"):
-            return data
-    except Exception as e:
-        print("GPT SECOND ERROR:", str(e))
-
-    return {
-        "message": "Я тебя чувствую ✨\n\nВ этом правда много непрожитого и неясного.\n\nСкажи, тебе сейчас важнее увидеть перспективу этой связи или понять, как выбрать себя?"
+    fallback = {
+        "message": "Я тебя чувствую ✨\n\nПохоже, здесь боль не только в самих событиях, а ещё и в том, что внутри будто нет опоры.\n\nСкажи, тебе сейчас важнее понять, есть ли у этой истории будущее, или как перестать в ней терять себя?"
     }
 
+    return gpt_json(prompt, fallback)
 
-def gpt_recommend(initial_text: str, first_answer: str, second_answer: str):
-    combined = (
-        f"Первое сообщение клиента: {initial_text}\n"
-        f"Ответ на первый вопрос: {first_answer}\n"
-        f"Ответ на второй вопрос: {second_answer}"
-    )
 
-    if not client:
-        offer = choose_offer_local(f"{initial_text} {first_answer} {second_answer}")
-        if offer == "basic":
-            return {
-                "offer": "basic",
-                "message": "Я бы сейчас мягко повела тебя в ✨ Мини-разбор за $11.\n\nЗдесь нужен один ясный и точный ответ, без лишнего круга."
-            }
-        return {
-            "offer": "deep",
-            "message": "Я бы сейчас повела тебя в 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целая внутренняя история, которую лучше раскрывать глубже."
-        }
+def gpt_pre_offer_reply(initial_text: str, reply_1: str, reply_2: str):
+    prompt = f"""
+Ты — Madame Mira.
+Стиль: женственный, мистический, мягкий, премиальный.
 
+Нужно написать ТРЕТЬЕ сообщение перед продажей.
+У тебя есть короткий диалог.
+
+Задача:
+1. Дать мини-инсайт.
+2. Показать, что ты уловила суть.
+3. Создать доверие.
+4. Не называть цену.
+5. Не вставлять кнопки.
+6. Подвести к тому, что ты можешь помочь ясностью.
+7. На русском.
+8. Коротко и красиво.
+
+Верни строго JSON:
+{{
+  "message": "текст"
+}}
+
+Диалог:
+Первое сообщение: {initial_text}
+Ответ 1: {reply_1}
+Ответ 2: {reply_2}
+""".strip()
+
+    fallback = {
+        "message": "Я уже чувствую основной узел этой истории ✨\n\nЗдесь проблема не только в человеке рядом, а в том, что внутри слишком долго не было ясности.\n\nИ именно ясность сейчас может вернуть тебе опору."
+    }
+
+    return gpt_json(prompt, fallback)
+
+
+def gpt_recommend(initial_text: str, reply_1: str, reply_2: str):
     prompt = f"""
 Ты — Madame Mira.
 Стиль: женственный, мягкий, мистический, премиальный.
 
-Сейчас нужно сделать ПЕРВУЮ продажу после короткого диалога.
+Сейчас нужно сделать мягкую продажу после короткого прогрева.
 
-У тебя есть только 2 формата:
+Есть только 2 формата:
 - basic = Мини-разбор $11
 - deep = Глубокий разбор $29
 
 Правила:
-1. Выбери ТОЛЬКО ОДИН формат.
+1. Выбери только ОДИН формат.
 2. Объясни, почему он подходит.
 3. Сделай это мягко, красиво, без давления.
-4. НЕ перечисляй оба варианта.
-5. НЕ задавай больше вопросов.
-6. НЕ будь сухой.
-7. На русском.
-8. Если тема про отношения, боль, путаницу, измену, сильные чувства, выбирай deep.
-9. Если вопрос один, короткий, конкретный, выбирай basic.
+4. Не перечисляй оба варианта.
+5. Не задавай больше вопросов.
+6. На русском.
+7. Если тема про отношения, боль, путаницу, сильные чувства, измену, тяжесть, выбирай deep.
+8. Если вопрос короткий, точечный, без глубины, выбирай basic.
 
 Верни строго JSON:
 {{
@@ -285,42 +299,35 @@ def gpt_recommend(initial_text: str, first_answer: str, second_answer: str):
 }}
 
 Диалог:
-{combined}
+Первое сообщение: {initial_text}
+Ответ 1: {reply_1}
+Ответ 2: {reply_2}
 """.strip()
 
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
-        data = json.loads((response.output_text or "").strip())
+    fallback_offer = choose_offer_local(f"{initial_text} {reply_1} {reply_2}")
 
-        offer = data.get("offer", "deep")
-        message = data.get("message", "").strip()
-
-        if offer not in ["basic", "deep"]:
-            offer = "deep"
-
-        if not message:
-            if offer == "basic":
-                message = "Я бы сейчас мягко повела тебя в ✨ Мини-разбор за $11.\n\nЗдесь нужен один ясный и точный ответ, без лишнего круга."
-            else:
-                message = "Я бы сейчас повела тебя в 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целая внутренняя история, которую лучше раскрывать глубже."
-
-        return {"offer": offer, "message": message}
-    except Exception as e:
-        print("GPT RECOMMEND ERROR:", str(e))
-
-    offer = choose_offer_local(f"{initial_text} {first_answer} {second_answer}")
-    if offer == "basic":
-        return {
+    if fallback_offer == "basic":
+        fallback = {
             "offer": "basic",
-            "message": "Я бы сейчас мягко повела тебя в ✨ Мини-разбор за $11.\n\nЗдесь нужен один ясный и точный ответ, без лишнего круга."
+            "message": "Я бы сейчас мягко повела тебя в ✨ Мини-разбор за $11.\n\nЗдесь нужен один ясный и точный ответ, чтобы снять лишнюю неопределённость."
+        }
+    else:
+        fallback = {
+            "offer": "deep",
+            "message": "Я бы сейчас повела тебя в 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целая внутренняя история, которую лучше раскрывать глубже."
         }
 
+    data = gpt_json(prompt, fallback)
+
+    offer = data.get("offer", fallback["offer"])
+    message = data.get("message", fallback["message"])
+
+    if offer not in ["basic", "deep"]:
+        offer = fallback["offer"]
+
     return {
-        "offer": "deep",
-        "message": "Я бы сейчас повела тебя в 🔮 Глубокий разбор за $29.\n\nПотому что здесь чувствуется не один вопрос, а целая внутренняя история, которую лучше раскрывать глубже."
+        "offer": offer,
+        "message": message
     }
 
 
@@ -468,23 +475,28 @@ def handle_user_message(chat_id, user_id, text):
         return
 
     if user["step"] == "waiting_clarify_1":
-        user["second_reply"] = text
+        user["reply_1"] = text
         second = gpt_second_reply(user["initial_text"], text)
         user["step"] = "waiting_clarify_2"
         send_message(chat_id, second["message"])
         return
 
     if user["step"] == "waiting_clarify_2":
+        user["reply_2"] = text
+        pre_offer = gpt_pre_offer_reply(
+            user["initial_text"],
+            user["reply_1"],
+            user["reply_2"]
+        )
+        send_message(chat_id, pre_offer["message"])
+
         result = gpt_recommend(
             user["initial_text"],
-            user["second_reply"],
-            text
+            user["reply_1"],
+            user["reply_2"]
         )
-        offer = result["offer"]
-        message = result["message"]
-
         user["step"] = "offer_ready"
-        send_offer_with_invoice(chat_id, user_id, offer, message)
+        send_offer_with_invoice(chat_id, user_id, result["offer"], result["message"])
         return
 
     user["initial_text"] = text
@@ -521,7 +533,7 @@ def main():
                         send_message(
                             chat_id,
                             "Привет, я Madame Mira ✨\n\n"
-                            "Расскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу почувствовать, какой формат подойдёт лучше."
+                            "Расскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу почувствовать, куда лучше смотреть дальше."
                         )
                     else:
                         handle_user_message(chat_id, user_id, text)
@@ -538,8 +550,8 @@ def main():
                     if data == "show_formats":
                         send_message(
                             chat_id,
-                            "Вот два формата, которые сейчас доступны ✨",
-                            hidden_menu_keyboard()
+                            "Сейчас доступны два формата разбора ✨",
+                            formats_keyboard()
                         )
 
                     elif data == "basic_info":
@@ -565,7 +577,8 @@ def main():
                     elif data == "help_pick":
                         user["step"] = None
                         user["initial_text"] = ""
-                        user["second_reply"] = ""
+                        user["reply_1"] = ""
+                        user["reply_2"] = ""
                         send_message(
                             chat_id,
                             "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
