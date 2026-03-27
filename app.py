@@ -47,9 +47,20 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
         "message_id": message_id,
         "text": text
     }
-    if reply_markup:
+    if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     requests.post(f"{TELEGRAM_API_URL}/editMessageText", json=payload, timeout=30)
+
+
+def edit_message_caption(chat_id, message_id, caption, reply_markup=None):
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "caption": caption
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json=payload, timeout=30)
 
 
 def send_photo(chat_id, file_id, caption=None, reply_markup=None):
@@ -81,39 +92,6 @@ def answer_callback_query(callback_query_id, text=None):
     if text:
         payload["text"] = text
     requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json=payload, timeout=30)
-
-
-def notify_admin(text):
-    if not ADMIN_CHAT_ID:
-        print("ADMIN_CHAT_ID not set")
-        return
-
-    requests.post(
-        f"{TELEGRAM_API_URL}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": text},
-        timeout=30
-    )
-
-
-def admin_receipt_keyboard(user_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
-            ]
-        ]
-    }
-
-
-def admin_application_keyboard(user_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🪄 Сделать разбор", "callback_data": f"admin_reading_{user_id}"}
-            ]
-        ]
-    }
 
 
 def get_user_state(user_id):
@@ -167,6 +145,27 @@ def payment_keyboard(invoice_url, offer):
             [{"text": "✅ Проверить оплату", "callback_data": "check_payment"}],
             [{"text": "💳 Перевод на карту", "callback_data": f"card_{offer}"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
+        ]
+    }
+
+
+def admin_receipt_keyboard(user_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
+            ]
+        ]
+    }
+
+
+def admin_application_keyboard(user_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🪄 Сделать разбор", "callback_data": f"admin_reading_{user_id}"}
+            ]
         ]
     }
 
@@ -487,6 +486,18 @@ def format_card_amount_uah(offer):
     return BASIC_UAH if offer == "basic" else DEEP_UAH
 
 
+def format_status_label(status):
+    mapping = {
+        "new": "⚪ новая",
+        "receipt_sent": "🟡 чек получен",
+        "receipt_rejected": "🔴 чек отклонён",
+        "paid": "🟢 оплата подтверждена",
+        "submitted": "🟣 заявка собрана",
+        "reading_sent": "✨ разбор отправлен"
+    }
+    return mapping.get(status, "⚪ новая")
+
+
 def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     user = get_user_state(user_id)
     user["offer"] = offer
@@ -505,6 +516,14 @@ def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     send_message(chat_id, intro_text, payment_keyboard(invoice["invoice_url"], offer))
 
 
+def send_admin_status_note(user_id):
+    user = get_user_state(user_id)
+    send_message(
+        ADMIN_CHAT_ID,
+        f"Статус заявки {user_id}: {format_status_label(user.get('status'))}"
+    )
+
+
 def finish_application(chat_id, user_id):
     user = get_user_state(user_id)
     offer_text = format_offer_text(user["offer"])
@@ -520,6 +539,7 @@ def finish_application(chat_id, user_id):
 
     admin_text = (
         "Новая заявка в Madame Mira 💸\n\n"
+        f"Статус: {format_status_label('submitted')}\n"
         f"User ID: {user_id}\n"
         f"Формат: {offer_text}\n"
         f"Оплата: {payment_method}\n"
@@ -540,7 +560,6 @@ def finish_application(chat_id, user_id):
     )
 
     user["status"] = "submitted"
-    user["step"] = "done"
 
 
 def handle_user_message(chat_id, user_id, text):
@@ -593,8 +612,12 @@ def handle_photo_or_document(chat_id, user_id, file_id, media_type):
         )
         return
 
+    user["payment_method"] = "перевод на карту"
+    user["status"] = "receipt_sent"
+
     caption = (
         "Чек на ручную проверку 💳\n\n"
+        f"Статус: {format_status_label(user['status'])}\n"
         f"User ID: {user_id}\n"
         f"Формат: {format_offer_text(user.get('offer'))}\n"
         f"Оплата: перевод на карту\n"
@@ -623,8 +646,6 @@ def handle_photo_or_document(chat_id, user_id, file_id, media_type):
         "Я отправила его на ручную проверку. После подтверждения оплаты напишу тебе."
     )
 
-    user["payment_method"] = "перевод на карту"
-    user["status"] = "receipt_sent"
     user["step"] = "waiting_manual_approval"
 
 
@@ -648,7 +669,6 @@ def main():
                     chat_id = message["chat"]["id"]
                     user_id = message["from"]["id"]
 
-                    # Игнорируем любые обычные сообщения из админ-группы
                     if chat_id == ADMIN_CHAT_ID:
                         continue
 
@@ -732,12 +752,14 @@ def main():
                         if status == "paid":
                             user["payment_method"] = "крипта"
                             user["step"] = "waiting_name"
+                            user["status"] = "paid"
                             send_message(
                                 callback_chat_id,
                                 "Оплату вижу ✅\n\n"
                                 "Теперь давай спокойно соберём заявку.\n\n"
                                 "Сначала напиши своё имя."
                             )
+                            send_admin_status_note(callback_from_id)
                         elif status in ["active", "pending"]:
                             send_message(
                                 callback_chat_id,
@@ -791,10 +813,19 @@ def main():
                             "Сначала напиши своё имя."
                         )
 
-                        send_message(
-                            ADMIN_CHAT_ID,
-                            f"Заявка {target_user_id} подтверждена ✅"
-                        )
+                        try:
+                            if "caption" in query["message"]:
+                                new_caption = query["message"]["caption"] + "\n\nСтатус: 🟢 оплата подтверждена"
+                                edit_message_caption(
+                                    ADMIN_CHAT_ID,
+                                    callback_message_id,
+                                    new_caption,
+                                    reply_markup=None
+                                )
+                            else:
+                                send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🟢 оплата подтверждена")
+                        except Exception:
+                            send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🟢 оплата подтверждена")
 
                     elif data.startswith("admin_reject_"):
                         target_user_id = int(data.split("_")[2])
@@ -808,10 +839,19 @@ def main():
                             "Пожалуйста, проверь перевод и отправь чек ещё раз."
                         )
 
-                        send_message(
-                            ADMIN_CHAT_ID,
-                            f"Заявка {target_user_id} отклонена ❌"
-                        )
+                        try:
+                            if "caption" in query["message"]:
+                                new_caption = query["message"]["caption"] + "\n\nСтатус: 🔴 чек отклонён"
+                                edit_message_caption(
+                                    ADMIN_CHAT_ID,
+                                    callback_message_id,
+                                    new_caption,
+                                    reply_markup=None
+                                )
+                            else:
+                                send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🔴 чек отклонён")
+                        except Exception:
+                            send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🔴 чек отклонён")
 
                     elif data.startswith("admin_reading_"):
                         target_user_id = int(data.split("_")[2])
@@ -831,21 +871,22 @@ def main():
                         )
 
                         reading_text = gpt_make_reading(user)
-
                         send_message(target_user_id, reading_text)
 
                         user["status"] = "reading_sent"
 
                         try:
+                            new_text = query["message"]["text"] + "\n\nСтатус: ✨ разбор отправлен"
                             edit_message(
                                 ADMIN_CHAT_ID,
                                 callback_message_id,
-                                query["message"]["text"] + "\n\nРазбор отправлен ✅"
+                                new_text,
+                                reply_markup=None
                             )
                         except Exception:
                             send_message(
                                 ADMIN_CHAT_ID,
-                                f"Разбор для {target_user_id} отправлен ✅"
+                                f"Статус заявки {target_user_id}: ✨ разбор отправлен"
                             )
 
         except Exception as e:
