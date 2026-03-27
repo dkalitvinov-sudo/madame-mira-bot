@@ -5,7 +5,7 @@ from openai import OpenAI
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CARD_NUMBER = os.getenv("CARD_NUMBER", "1111 2222 3333 4444")
 
@@ -107,6 +107,17 @@ def notify_admin_with_buttons(text, user_id):
         },
         timeout=30
     )
+
+
+def admin_receipt_keyboard(user_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
+            ]
+        ]
+    }
 
 
 def get_user_state(user_id):
@@ -405,17 +416,6 @@ def format_card_amount_uah(offer):
     return BASIC_UAH if offer == "basic" else DEEP_UAH
 
 
-def admin_receipt_keyboard(user_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
-            ]
-        ]
-    }
-
-
 def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     user = get_user_state(user_id)
     user["offer"] = offer
@@ -490,16 +490,15 @@ def handle_user_message(chat_id, user_id, text):
         return
 
     if user["step"] == "waiting_card_receipt_text":
-        if ADMIN_CHAT_ID:
-            notify_admin_with_buttons(
-                "Запрос на ручную проверку оплаты 💳\n\n"
-                f"User ID: {user_id}\n"
-                f"Формат: {format_offer_text(user.get('offer'))}\n"
-                f"Оплата: перевод на карту\n"
-                f"Сумма: {format_card_amount_uah(user.get('offer'))} грн\n\n"
-                f"Сообщение клиента:\n{text}",
-                user_id
-            )
+        notify_admin_with_buttons(
+            "Запрос на ручную проверку оплаты 💳\n\n"
+            f"User ID: {user_id}\n"
+            f"Формат: {format_offer_text(user.get('offer'))}\n"
+            f"Оплата: перевод на карту\n"
+            f"Сумма: {format_card_amount_uah(user.get('offer'))} грн\n\n"
+            f"Сообщение клиента:\n{text}",
+            user_id
+        )
 
         send_message(
             chat_id,
@@ -585,6 +584,10 @@ def main():
                     message = update["message"]
                     chat_id = message["chat"]["id"]
                     user_id = message["from"]["id"]
+
+                    # Игнорируем обычные сообщения из админ-группы
+                    if chat_id == ADMIN_CHAT_ID:
+                        continue
 
                     if "photo" in message:
                         file_id = message["photo"][-1]["file_id"]
@@ -692,7 +695,7 @@ def main():
                         send_message(
                             callback_chat_id,
                             "💳 Перевод на карту\n\n"
-                            f"Сумма: {CARD_BASIC_UAH} грн\n"
+                            f"Сумма: {BASIC_UAH} грн\n"
                             f"Карта: {CARD_NUMBER}\n\n"
                             "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
                         )
@@ -705,7 +708,7 @@ def main():
                         send_message(
                             callback_chat_id,
                             "💳 Перевод на карту\n\n"
-                            f"Сумма: {CARD_DEEP_UAH} грн\n"
+                            f"Сумма: {DEEP_UAH} грн\n"
                             f"Карта: {CARD_NUMBER}\n\n"
                             "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
                         )
