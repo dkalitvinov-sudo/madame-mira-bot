@@ -17,9 +17,11 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 last_update_id = None
 USER_STATE = {}
 
-# Округленные суммы в гривнах
-CARD_BASIC_UAH = 440
-CARD_DEEP_UAH = 880
+BASIC_USD = "10"
+DEEP_USD = "20"
+
+BASIC_UAH = "440"
+DEEP_UAH = "880"
 
 
 def get_updates():
@@ -39,23 +41,27 @@ def send_message(chat_id, text, reply_markup=None):
     requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
 
 
-def send_photo(chat_id, file_id, caption=None):
+def send_photo(chat_id, file_id, caption=None, reply_markup=None):
     payload = {
         "chat_id": chat_id,
         "photo": file_id
     }
     if caption:
         payload["caption"] = caption
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=payload, timeout=30)
 
 
-def send_document(chat_id, file_id, caption=None):
+def send_document(chat_id, file_id, caption=None, reply_markup=None):
     payload = {
         "chat_id": chat_id,
         "document": file_id
     }
     if caption:
         payload["caption"] = caption
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     requests.post(f"{TELEGRAM_API_URL}/sendDocument", data=payload, timeout=30)
 
 
@@ -74,6 +80,31 @@ def notify_admin(text):
     requests.post(
         f"{TELEGRAM_API_URL}/sendMessage",
         json={"chat_id": ADMIN_CHAT_ID, "text": text},
+        timeout=30
+    )
+
+
+def notify_admin_with_buttons(text, user_id):
+    if not ADMIN_CHAT_ID:
+        print("ADMIN_CHAT_ID not set")
+        return
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
+            ]
+        ]
+    }
+
+    requests.post(
+        f"{TELEGRAM_API_URL}/sendMessage",
+        json={
+            "chat_id": ADMIN_CHAT_ID,
+            "text": text,
+            "reply_markup": keyboard
+        },
         timeout=30
     )
 
@@ -296,7 +327,7 @@ def create_crypto_invoice(user_id, offer):
         print("CRYPTO_PAY_TOKEN not set")
         return None
 
-    amount = "10" if offer == "basic" else "20"
+    amount = BASIC_USD if offer == "basic" else DEEP_USD
     description = "Mini" if offer == "basic" else "Deep"
     payload_value = f"user_{user_id}_{offer}"
 
@@ -370,6 +401,21 @@ def format_offer_text(offer):
     return "Не выбран"
 
 
+def format_card_amount_uah(offer):
+    return BASIC_UAH if offer == "basic" else DEEP_UAH
+
+
+def admin_receipt_keyboard(user_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
+            ]
+        ]
+    }
+
+
 def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     user = get_user_state(user_id)
     user["offer"] = offer
@@ -436,25 +482,35 @@ def handle_user_message(chat_id, user_id, text):
         finish_application(chat_id, user_id)
         return
 
-    if user["step"] == "waiting_card_receipt_text":
-        notify_admin(
-            "Запрос на ручную проверку оплаты 💳\n\n"
-            f"User ID: {user_id}\n"
-            f"Формат: {format_offer_text(user.get('offer'))}\n"
-            f"Сообщение клиента:\n{text}"
-        )
+    if user["step"] == "waiting_card_receipt":
         send_message(
             chat_id,
-            "Я передала подтверждение на ручную проверку ✨\n\n"
-            "Как только оплата будет проверена, можно будет перейти к разбору."
+            "Жду фото или скрин чека ✨\n\nПросто отправь изображение сюда, и я передам его на проверку."
+        )
+        return
+
+    if user["step"] == "waiting_card_receipt_text":
+        if ADMIN_CHAT_ID:
+            notify_admin_with_buttons(
+                "Запрос на ручную проверку оплаты 💳\n\n"
+                f"User ID: {user_id}\n"
+                f"Формат: {format_offer_text(user.get('offer'))}\n"
+                f"Оплата: перевод на карту\n"
+                f"Сумма: {format_card_amount_uah(user.get('offer'))} грн\n\n"
+                f"Сообщение клиента:\n{text}",
+                user_id
+            )
+
+        send_message(
+            chat_id,
+            "Я передала сообщение на ручную проверку ✨\n\n"
+            "Как только оплата будет проверена, я напишу тебе."
         )
         user["step"] = "waiting_manual_approval"
         return
 
     if user["step"] == "waiting_clarify_1":
         user["reply_1"] = text
-
-        # Быстрее: сразу рекомендация после второго сообщения пользователя
         result = gpt_recommend(user["initial_text"], text)
         user["step"] = "offer_ready"
         send_offer_with_invoice(chat_id, user_id, result["offer"], result["message"])
@@ -480,19 +536,30 @@ def handle_photo_or_document(chat_id, user_id, file_id, media_type):
         "Чек на ручную проверку 💳\n\n"
         f"User ID: {user_id}\n"
         f"Формат: {format_offer_text(user.get('offer'))}\n"
-        f"Оплата: перевод на карту"
+        f"Оплата: перевод на карту\n"
+        f"Сумма: {format_card_amount_uah(user.get('offer'))} грн"
     )
 
     if ADMIN_CHAT_ID:
         if media_type == "photo":
-            send_photo(ADMIN_CHAT_ID, file_id, caption)
+            send_photo(
+                ADMIN_CHAT_ID,
+                file_id,
+                caption=caption,
+                reply_markup=admin_receipt_keyboard(user_id)
+            )
         else:
-            send_document(ADMIN_CHAT_ID, file_id, caption)
+            send_document(
+                ADMIN_CHAT_ID,
+                file_id,
+                caption=caption,
+                reply_markup=admin_receipt_keyboard(user_id)
+            )
 
     send_message(
         chat_id,
         "Чек получила ✨\n\n"
-        "Я отправила его на ручную проверку. После подтверждения оплаты можно будет переходить к разбору."
+        "Я отправила его на ручную проверку. После подтверждения оплаты напишу тебе."
     )
 
     user["payment_method"] = "перевод на карту"
@@ -538,7 +605,8 @@ def main():
                         reset_user_form(user_id)
                         send_message(
                             chat_id,
-                            "Привет, я Madame Mira ✨\n\nРасскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу почувствовать, куда лучше смотреть дальше."
+                            "Привет, я Madame Mira ✨\n\n"
+                            "Расскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу почувствовать, куда лучше смотреть дальше."
                         )
                     else:
                         handle_user_message(chat_id, user_id, text)
@@ -546,73 +614,83 @@ def main():
                 elif "callback_query" in update:
                     query = update["callback_query"]
                     data = query["data"]
-                    chat_id = query["message"]["chat"]["id"]
-                    user_id = query["from"]["id"]
+                    callback_chat_id = query["message"]["chat"]["id"]
+                    callback_from_id = query["from"]["id"]
 
-                    user = get_user_state(user_id)
                     answer_callback_query(query["id"])
 
                     if data == "show_formats":
                         send_message(
-                            chat_id,
+                            callback_chat_id,
                             "Сейчас доступны два формата разбора ✨",
                             formats_keyboard()
                         )
 
                     elif data == "basic_info":
+                        user = get_user_state(callback_from_id)
                         user["offer"] = "basic"
                         send_offer_with_invoice(
-                            chat_id,
-                            user_id,
+                            callback_chat_id,
+                            callback_from_id,
                             "basic",
-                            "✨ Мини-разбор — $10\n\nОн подойдёт, если тебе нужен быстрый и точный ответ на один главный вопрос."
+                            "✨ Мини-разбор — $10.\n\n"
+                            "Он подойдёт, если тебе нужен быстрый и точный ответ на один главный вопрос."
                         )
 
                     elif data == "deep_info":
+                        user = get_user_state(callback_from_id)
                         user["offer"] = "deep"
                         send_offer_with_invoice(
-                            chat_id,
-                            user_id,
+                            callback_chat_id,
+                            callback_from_id,
                             "deep",
-                            "🔮 Глубокий разбор — $20\n\nОн подойдёт, если в ситуации много чувств, подтекста и важно увидеть картину глубже."
+                            "🔮 Глубокий разбор — $20.\n\n"
+                            "Он подойдёт, если в ситуации много чувств, подтекста и важно увидеть картину глубже."
                         )
 
                     elif data == "help_pick":
+                        user = get_user_state(callback_from_id)
                         user["step"] = None
                         user["initial_text"] = ""
                         user["reply_1"] = ""
                         send_message(
-                            chat_id,
+                            callback_chat_id,
                             "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
                         )
 
                     elif data == "check_payment":
+                        user = get_user_state(callback_from_id)
                         status = get_invoice_status(user.get("invoice_id"))
 
                         if status == "paid":
                             user["payment_method"] = "крипта"
                             user["step"] = "waiting_name"
                             send_message(
-                                chat_id,
-                                "Оплату вижу ✅\n\nТеперь давай спокойно соберём заявку.\n\nСначала напиши своё имя."
+                                callback_chat_id,
+                                "Оплату вижу ✅\n\n"
+                                "Теперь давай спокойно соберём заявку.\n\n"
+                                "Сначала напиши своё имя."
                             )
                         elif status in ["active", "pending"]:
                             send_message(
-                                chat_id,
-                                "Я ещё не вижу подтверждённую оплату ✨\n\nЕсли ты уже оплатил(а), подожди 10–20 секунд и нажми «Проверить оплату» ещё раз."
+                                callback_chat_id,
+                                "Я ещё не вижу подтверждённую оплату ✨\n\n"
+                                "Если ты уже оплатил(а), подожди 10–20 секунд и нажми «Проверить оплату» ещё раз."
                             )
                         else:
                             send_message(
-                                chat_id,
-                                "Пока не получилось подтвердить оплату.\n\nПопробуй открыть счёт ещё раз или вернись чуть позже."
+                                callback_chat_id,
+                                "Пока не получилось подтвердить оплату.\n\n"
+                                "Попробуй открыть счёт ещё раз или вернись чуть позже."
                             )
 
                     elif data == "card_basic":
+                        user = get_user_state(callback_from_id)
                         user["offer"] = "basic"
                         user["payment_method"] = "перевод на карту"
                         user["step"] = "waiting_card_receipt"
                         send_message(
-                            chat_id,
+                            callback_chat_id,
                             "💳 Перевод на карту\n\n"
                             f"Сумма: {CARD_BASIC_UAH} грн\n"
                             f"Карта: {CARD_NUMBER}\n\n"
@@ -620,15 +698,50 @@ def main():
                         )
 
                     elif data == "card_deep":
+                        user = get_user_state(callback_from_id)
                         user["offer"] = "deep"
                         user["payment_method"] = "перевод на карту"
                         user["step"] = "waiting_card_receipt"
                         send_message(
-                            chat_id,
+                            callback_chat_id,
                             "💳 Перевод на карту\n\n"
                             f"Сумма: {CARD_DEEP_UAH} грн\n"
                             f"Карта: {CARD_NUMBER}\n\n"
                             "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
+                        )
+
+                    elif data.startswith("admin_accept_"):
+                        target_user_id = int(data.split("_")[2])
+                        user = get_user_state(target_user_id)
+                        user["payment_method"] = "перевод на карту"
+                        user["step"] = "waiting_name"
+
+                        send_message(
+                            target_user_id,
+                            "Оплата подтверждена ✅\n\n"
+                            "Теперь давай спокойно соберём заявку.\n\n"
+                            "Сначала напиши своё имя."
+                        )
+
+                        send_message(
+                            ADMIN_CHAT_ID,
+                            f"Заявка {target_user_id} подтверждена ✅"
+                        )
+
+                    elif data.startswith("admin_reject_"):
+                        target_user_id = int(data.split("_")[2])
+                        user = get_user_state(target_user_id)
+                        user["step"] = "waiting_card_receipt"
+
+                        send_message(
+                            target_user_id,
+                            "Я пока не смогла подтвердить оплату ❗\n\n"
+                            "Пожалуйста, проверь перевод и отправь чек ещё раз."
+                        )
+
+                        send_message(
+                            ADMIN_CHAT_ID,
+                            f"Заявка {target_user_id} отклонена ❌"
                         )
 
         except Exception as e:
