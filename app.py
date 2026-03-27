@@ -12,7 +12,7 @@ CARD_NUMBER = os.getenv("CARD_NUMBER", "1111 2222 3333 4444")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TOKEN}"
 CRYPTO_API_URL = "https://pay.crypt.bot/api"
 
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 last_update_id = None
 USER_STATE = {}
@@ -24,874 +24,248 @@ BASIC_UAH = "440"
 DEEP_UAH = "880"
 
 
-def get_updates():
-    global last_update_id
-    params = {"timeout": 100, "offset": last_update_id}
-    response = requests.get(f"{TELEGRAM_API_URL}/getUpdates", params=params, timeout=120)
-    return response.json()
-
-
-def send_message(chat_id, text, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
-
-
-def edit_message(chat_id, message_id, text, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text
-    }
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
-    requests.post(f"{TELEGRAM_API_URL}/editMessageText", json=payload, timeout=30)
-
-
-def edit_message_caption(chat_id, message_id, caption, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "caption": caption
-    }
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
-    requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json=payload, timeout=30)
-
-
-def send_photo(chat_id, file_id, caption=None, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "photo": file_id
-    }
-    if caption:
-        payload["caption"] = caption
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=payload, timeout=30)
-
-
-def send_document(chat_id, file_id, caption=None, reply_markup=None):
-    payload = {
-        "chat_id": chat_id,
-        "document": file_id
-    }
-    if caption:
-        payload["caption"] = caption
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API_URL}/sendDocument", data=payload, timeout=30)
-
-
-def answer_callback_query(callback_query_id, text=None):
-    payload = {"callback_query_id": callback_query_id}
-    if text:
-        payload["text"] = text
-    requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json=payload, timeout=30)
-
-
-def get_user_state(user_id):
+def get_user(user_id):
     if user_id not in USER_STATE:
         USER_STATE[user_id] = {
             "step": None,
             "offer": None,
-            "payment_method": None,
             "name": "",
             "situation": "",
             "question": "",
-            "invoice_id": None,
-            "invoice_url": None,
             "initial_text": "",
             "reply_1": "",
-            "status": "new"
+            "invoice_id": None,
+            "invoice_url": None,
+            "payment_method": None,
+            "status": "new",
+            "followups_left": 0
         }
     return USER_STATE[user_id]
 
 
-def reset_user_form(user_id):
-    USER_STATE[user_id] = {
-        "step": None,
-        "offer": None,
-        "payment_method": None,
-        "name": "",
-        "situation": "",
-        "question": "",
-        "invoice_id": None,
-        "invoice_url": None,
-        "initial_text": "",
-        "reply_1": "",
-        "status": "new"
-    }
+def send(chat_id, text, markup=None):
+    data = {"chat_id": chat_id, "text": text}
+    if markup:
+        data["reply_markup"] = markup
+    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=data)
 
 
-def formats_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "✨ Мини-разбор $10", "callback_data": "basic_info"}],
-            [{"text": "🔮 Глубокий разбор $20", "callback_data": "deep_info"}],
-            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
-        ]
-    }
-
-
-def payment_keyboard(invoice_url, offer):
-    return {
-        "inline_keyboard": [
-            [{"text": "💸 Оплатить криптой", "url": invoice_url}],
-            [{"text": "✅ Проверить оплату", "callback_data": "check_payment"}],
-            [{"text": "💳 Перевод на карту", "callback_data": f"card_{offer}"}],
-            [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
-        ]
-    }
-
-
-def admin_receipt_keyboard(user_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
-            ]
-        ]
-    }
-
-
-def admin_application_keyboard(user_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🪄 Сделать разбор", "callback_data": f"admin_reading_{user_id}"}
-            ]
-        ]
-    }
-
-
-def choose_offer_local(text: str):
-    t = text.lower().strip()
-
-    strong_deep_keywords = [
-        "измена", "предательство", "ушел к другой", "ушёл к другой",
-        "развод", "любовный треугольник", "предал", "бросил", "другая женщина"
-    ]
-
-    medium_deep_keywords = [
-        "отнош", "парень", "муж", "бывш", "ушел", "ушёл", "другая", "другой",
-        "любов", "чувства", "больно", "сложно", "тяжело", "кризис",
-        "расстав", "ревность", "запутал", "запуталась", "запутался",
-        "не понимаю", "что делать", "будущее", "подруга", "одиночество",
-        "не складываются", "страдаю", "потеряла"
-    ]
-
-    basic_keywords = [
-        "быстро", "кратко", "коротко", "мини", "один вопрос",
-        "простой вопрос", "быстрый ответ", "короткий ответ"
-    ]
-
-    deep_score = 0
-    basic_score = 0
-
-    for word in strong_deep_keywords:
-        if word in t:
-            deep_score += 3
-
-    for word in medium_deep_keywords:
-        if word in t:
-            deep_score += 1
-
-    for word in basic_keywords:
-        if word in t:
-            basic_score += 2
-
-    if len(t) > 180:
-        deep_score += 2
-    elif len(t) < 60:
-        basic_score += 1
-
-    if deep_score >= 4:
-        return "deep"
-
-    if basic_score >= 1:
-        return "basic"
-
-    if deep_score >= 2 and basic_score == 0:
-        return "basic"
-
-    return "basic"
-
-
-def gpt_json(prompt, fallback):
-    if not client:
-        return fallback
-
+def gpt(text):
     try:
-        response = client.responses.create(
+        r = client.responses.create(
             model="gpt-4.1-mini",
-            input=prompt
+            input=text
         )
-        text = (response.output_text or "").strip()
-        data = json.loads(text)
-        return data
-    except Exception as e:
-        print("GPT ERROR:", str(e))
-        return fallback
+        return r.output_text.strip()
+    except:
+        return "Я чувствую, что здесь есть важный внутренний момент ✨"
 
 
-def gpt_first_reply(user_text: str):
-    prompt = f"""
-Ты — Madame Mira.
-Стиль: женственный, мягкий, мистический, тёплый.
+# -------- GPT БЛОКИ --------
 
-Нужно написать первое сообщение после того, как человек поделился ситуацией.
+def first_reply(user_text):
+    return gpt(f"""
+Ты — Madame Mira. Ответь мягко, тепло.
 
-Правила:
-1. Покажи, что ты почувствовала его состояние.
-2. Дай короткий эффект "я тебя вижу".
-3. Задай один тёплый вопрос.
-4. Не продавай.
-5. Не упоминай оплату, цены, форматы.
-6. На русском.
-7. Коротко и красиво.
-
-Верни строго JSON:
-{{
-  "message": "текст"
-}}
-
-Сообщение пользователя:
+Сообщение:
 {user_text}
-""".strip()
 
-    fallback = {
-        "message": "Я чувствую, что за этими словами стоит усталость сердца ✨\n\nСкажи, что ранит сильнее: сама ситуация или то, что внутри до сих пор нет ясности?"
-    }
+Сделай:
+- эмпатия
+- 1 вопрос
+- без продажи
+""")
 
-    return gpt_json(prompt, fallback)
 
-
-def gpt_recommend(initial_text: str, reply_1: str):
-    prompt = f"""
+def recommend(user_text, reply):
+    return gpt(f"""
 Ты — Madame Mira.
-Стиль: женственный, мягкий, мистический, премиальный.
 
-Сейчас нужно сделать мягкую продажу после короткого прогрева.
+Нужно мягко предложить формат.
 
-Есть только 2 формата:
-- basic = Мини-разбор $10
-- deep = Глубокий разбор $20
+Если не супер сложная ситуация → предложи мини.
 
-Очень важно:
-1. Сначала смотри, можно ли помочь через более лёгкий вход.
-2. Если ситуация не критически тяжёлая и не многослойная, предпочитай basic.
-3. Deep выбирай только когда в истории реально много боли, запутанности, измены, тяжёлой динамики или большого контекста.
-4. Выбери только один формат.
-5. Объясни, почему он подходит.
-6. Сделай это мягко и красиво, без давления.
-7. Не перечисляй оба варианта.
-8. На русском.
+Сообщения:
+{user_text}
+{reply}
 
-Верни строго JSON:
-{{
-  "offer": "basic" или "deep",
-  "message": "текст"
-}}
-
-Диалог:
-Первое сообщение: {initial_text}
-Ответ человека: {reply_1}
-""".strip()
-
-    fallback_offer = choose_offer_local(f"{initial_text} {reply_1}")
-
-    if fallback_offer == "basic":
-        fallback = {
-            "offer": "basic",
-            "message": "Я бы мягко повела тебя в ✨ Мини-разбор за $10.\n\nЗдесь сейчас важнее получить один ясный и точный ответ, который снимет лишнюю неопределённость."
-        }
-    else:
-        fallback = {
-            "offer": "deep",
-            "message": "Я бы повела тебя в 🔮 Глубокий разбор за $20.\n\nПотому что здесь чувствуется более глубокий внутренний узел, который лучше раскрывать шире."
-        }
-
-    data = gpt_json(prompt, fallback)
-    offer = data.get("offer", fallback["offer"])
-    message = data.get("message", fallback["message"])
-
-    if offer not in ["basic", "deep"]:
-        offer = fallback["offer"]
-
-    return {
-        "offer": offer,
-        "message": message
-    }
+Ответ:
+""")
 
 
-def gpt_make_reading(user):
-    offer_text = format_offer_text(user.get("offer"))
-
-    prompt = f"""
+def reading(user):
+    return gpt(f"""
 Ты — Madame Mira.
-Сделай готовый разбор для клиента на русском.
+
+Сделай разбор.
+
+Имя: {user['name']}
+Ситуация: {user['situation']}
+Вопрос: {user['question']}
 
 Стиль:
-- женственный
-- мистический
+- глубокий
 - мягкий
-- уверенный
-- премиальный
-- без пошлости и без цирка
-
-Задача:
-1. Напиши разбор так, будто это персональный ответ.
-2. Не говори, что ты ИИ.
-3. Не упоминай модель, систему, промпт.
-4. Дай ощущение, что ты почувствовала суть.
-5. Структура:
-   - короткое вступление
-   - что ты видишь в ситуации
-   - главный внутренний узел
-   - куда лучше смотреть дальше
-   - мягкое завершение
-6. Для basic ответ короче.
-7. Для deep ответ подробнее и глубже.
-8. Не используй списки с цифрами.
-9. Не пиши слишком сухо.
-
-Данные клиента:
-Формат: {offer_text}
-Имя: {user.get("name")}
-Ситуация: {user.get("situation")}
-Что хочет понять: {user.get("question")}
-""".strip()
-
-    if not client:
-        if user.get("offer") == "basic":
-            return (
-                f"{user.get('name')}, я посмотрела в суть твоей истории ✨\n\n"
-                "Сейчас я вижу, что основная боль рождается не только из самих событий, а из ощущения, что тебя будто не слышат и не встречают по-настоящему.\n\n"
-                "Здесь важно не пытаться вытащить отношения одной силой. В первую очередь тебе нужна ясность: есть ли с той стороны реальная готовность слышать тебя и двигаться навстречу.\n\n"
-                "Твоя точка силы сейчас не в том, чтобы давить, а в том, чтобы увидеть правду без самообмана. Именно из этой ясности и рождается правильное движение дальше 💫"
-            )
-        return (
-            f"{user.get('name')}, я глубже вошла в твою ситуацию ✨\n\n"
-            "Я вижу, что здесь много накопленного напряжения. Не только обида или усталость, а внутреннее чувство, что ты стараешься удержать то, что перестало откликаться тебе так, как нужно сердцу.\n\n"
-            "Главный узел в этой истории связан с нарушенным контактом. Когда один человек пытается достучаться, а другой словно закрыт, в отношениях начинает расти не близость, а одиночество вдвоём.\n\n"
-            "Сейчас тебе важно не просто наладить связь любой ценой, а честно посмотреть: есть ли между вами живое движение навстречу, или ты слишком долго несёшь всё на себе.\n\n"
-            "Я вижу, что твой путь сейчас — не в бесконечных попытках заслужить отклик, а в возвращении к собственной ценности, голосу и внутренней опоре. Когда ты перестаёшь терять себя, становится видно, кто действительно готов быть рядом.\n\n"
-            "Если смотреть дальше, то для тебя открывается не только тема отношений, но и тема личной силы. И именно через неё приходит та ясность, которой тебе сейчас так не хватает 💫"
-        )
-
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
-        text = (response.output_text or "").strip()
-        if text:
-            return text
-    except Exception as e:
-        print("GPT READING ERROR:", str(e))
-
-    return (
-        f"{user.get('name')}, я посмотрела в глубину этой истории ✨\n\n"
-        "Сейчас для тебя особенно важно не идти за тревогой, а за ясностью. Там, где нет ясности, сердце начинает додумывать и уставать сильнее, чем от самих событий.\n\n"
-        "Я вижу, что тебе нужно не только понять другого человека, но и снова услышать себя. И именно это станет для тебя точкой разворота дальше 💫"
-    )
+- эмоциональный
+""")
 
 
-def create_crypto_invoice(user_id, offer):
-    if not CRYPTO_PAY_TOKEN:
-        print("CRYPTO_PAY_TOKEN not set")
-        return None
+# -------- ОСНОВА --------
 
-    amount = BASIC_USD if offer == "basic" else DEEP_USD
-    description = "Mini" if offer == "basic" else "Deep"
-    payload_value = f"user_{user_id}_{offer}"
+def handle_text(chat_id, user_id, text):
+    user = get_user(user_id)
 
-    try:
-        response = requests.post(
-            f"{CRYPTO_API_URL}/createInvoice",
-            headers={
-                "Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN,
-                "Content-Type": "application/json"
-            },
-            json={
-                "asset": "USDT",
-                "amount": amount,
-                "description": description,
-                "payload": payload_value
-            },
-            timeout=30
-        )
+    # FOLLOW-UP
+    if user["step"] == "followup":
+        if user["followups_left"] <= 0:
+            send(chat_id, "Мы уже завершили этот разбор ✨")
+            return
 
-        print("CRYPTO CREATE:", response.text)
-        data = response.json()
+        answer = gpt(f"""
+Ты продолжаешь разбор.
 
-        if not data.get("ok"):
-            print("CRYPTO CREATE ERROR:", data)
-            return None
+Вопрос клиента:
+{text}
+""")
 
-        result = data["result"]
-        return {
-            "invoice_id": result["invoice_id"],
-            "invoice_url": result["bot_invoice_url"]
-        }
-    except Exception as e:
-        print("CRYPTO CREATE EXCEPTION:", str(e))
-        return None
+        send(chat_id, answer)
 
+        user["followups_left"] -= 1
 
-def get_invoice_status(invoice_id):
-    if not CRYPTO_PAY_TOKEN or not invoice_id:
-        return None
+        if user["followups_left"] == 0:
+            send(chat_id, "На этом завершаем ✨")
 
-    try:
-        response = requests.get(
-            f"{CRYPTO_API_URL}/getInvoices",
-            headers={"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN},
-            params={"invoice_ids": str(invoice_id)},
-            timeout=30
-        )
-
-        print("CRYPTO STATUS:", response.text)
-        data = response.json()
-
-        if not data.get("ok"):
-            print("CRYPTO STATUS ERROR:", data)
-            return None
-
-        items = data["result"]["items"]
-        if not items:
-            return None
-
-        return items[0].get("status")
-    except Exception as e:
-        print("CRYPTO STATUS EXCEPTION:", str(e))
-        return None
-
-
-def format_offer_text(offer):
-    if offer == "basic":
-        return "Мини-разбор $10"
-    if offer == "deep":
-        return "Глубокий разбор $20"
-    return "Не выбран"
-
-
-def format_card_amount_uah(offer):
-    return BASIC_UAH if offer == "basic" else DEEP_UAH
-
-
-def format_status_label(status):
-    mapping = {
-        "new": "⚪ новая",
-        "receipt_sent": "🟡 чек получен",
-        "receipt_rejected": "🔴 чек отклонён",
-        "paid": "🟢 оплата подтверждена",
-        "submitted": "🟣 заявка собрана",
-        "reading_sent": "✨ разбор отправлен"
-    }
-    return mapping.get(status, "⚪ новая")
-
-
-def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
-    user = get_user_state(user_id)
-    user["offer"] = offer
-
-    invoice = create_crypto_invoice(user_id, offer)
-    if not invoice:
-        send_message(
-            chat_id,
-            "Не получилось создать счёт 😔\n\nПопробуй ещё раз через минуту."
-        )
         return
 
-    user["invoice_id"] = invoice["invoice_id"]
-    user["invoice_url"] = invoice["invoice_url"]
-
-    send_message(chat_id, intro_text, payment_keyboard(invoice["invoice_url"], offer))
-
-
-def send_admin_status_note(user_id):
-    user = get_user_state(user_id)
-    send_message(
-        ADMIN_CHAT_ID,
-        f"Статус заявки {user_id}: {format_status_label(user.get('status'))}"
-    )
-
-
-def finish_application(chat_id, user_id):
-    user = get_user_state(user_id)
-    offer_text = format_offer_text(user["offer"])
-    payment_method = user.get("payment_method", "не указан")
-
-    send_message(
-        chat_id,
-        "Заявка принята ✨\n\n"
-        f"Формат: {offer_text}\n"
-        f"Имя: {user['name']}\n\n"
-        "Я получила всё, что нужно для начала разбора 💫"
-    )
-
-    admin_text = (
-        "Новая заявка в Madame Mira 💸\n\n"
-        f"Статус: {format_status_label('submitted')}\n"
-        f"User ID: {user_id}\n"
-        f"Формат: {offer_text}\n"
-        f"Оплата: {payment_method}\n"
-        f"Имя: {user['name']}\n\n"
-        f"Ситуация:\n{user['situation']}\n\n"
-        f"Что хочет понять:\n{user['question']}\n\n"
-        f"Invoice ID: {user['invoice_id']}"
-    )
-
-    requests.post(
-        f"{TELEGRAM_API_URL}/sendMessage",
-        json={
-            "chat_id": ADMIN_CHAT_ID,
-            "text": admin_text,
-            "reply_markup": admin_application_keyboard(user_id)
-        },
-        timeout=30
-    )
-
-    user["status"] = "submitted"
-
-
-def handle_user_message(chat_id, user_id, text):
-    user = get_user_state(user_id)
-
-    if user["step"] == "waiting_name":
+    # анкета
+    if user["step"] == "name":
         user["name"] = text
-        user["step"] = "waiting_situation"
-        send_message(chat_id, "Приняла 💫\n\nТеперь коротко опиши свою ситуацию.")
+        user["step"] = "situation"
+        send(chat_id, "Опиши ситуацию ✨")
         return
 
-    if user["step"] == "waiting_situation":
+    if user["step"] == "situation":
         user["situation"] = text
-        user["step"] = "waiting_question"
-        send_message(chat_id, "Хорошо.\n\nТеперь напиши, что именно ты хочешь понять или узнать в этом разборе.")
+        user["step"] = "question"
+        send(chat_id, "Что хочешь понять?")
         return
 
-    if user["step"] == "waiting_question":
+    if user["step"] == "question":
         user["question"] = text
-        finish_application(chat_id, user_id)
+        user["status"] = "submitted"
+
+        send(chat_id, "Заявка принята ✨")
+
+        # отправка в админку
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+            "chat_id": ADMIN_CHAT_ID,
+            "text": f"Заявка\nID:{user_id}\n{user['situation']}",
+            "reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "🪄 Сделать разбор", "callback_data": f"read_{user_id}"}
+                ]]
+            }
+        })
+
         return
 
-    if user["step"] == "waiting_card_receipt":
-        send_message(
-            chat_id,
-            "Жду фото или скрин чека ✨\n\nПросто отправь изображение сюда, и я передам его на проверку."
-        )
-        return
-
-    if user["step"] == "waiting_clarify_1":
+    # диалог
+    if user["step"] == "wait_reply":
         user["reply_1"] = text
-        result = gpt_recommend(user["initial_text"], text)
-        user["step"] = "offer_ready"
-        send_offer_with_invoice(chat_id, user_id, result["offer"], result["message"])
+
+        msg = recommend(user["initial_text"], text)
+
+        user["offer"] = "basic"
+        user["step"] = "pay"
+
+        send(chat_id, msg)
+        send(chat_id, "Оплатить:", {
+            "inline_keyboard": [
+                [{"text": "💸 Крипта", "callback_data": "pay_crypto"}],
+                [{"text": "💳 Карта", "callback_data": "pay_card"}]
+            ]
+        })
         return
 
+    # старт
     user["initial_text"] = text
-    first = gpt_first_reply(text)
-    user["step"] = "waiting_clarify_1"
-    send_message(chat_id, first["message"])
+    user["step"] = "wait_reply"
+
+    send(chat_id, first_reply(text))
 
 
-def handle_photo_or_document(chat_id, user_id, file_id, media_type):
-    user = get_user_state(user_id)
+# -------- CALLBACK --------
 
-    if user["step"] != "waiting_card_receipt":
-        send_message(
-            chat_id,
-            "Я увидела файл ✨\n\nЕсли это не чек по оплате, просто продолжай диалог."
-        )
+def handle_callback(q):
+    data = q["data"]
+    user_id = q["from"]["id"]
+    chat_id = q["message"]["chat"]["id"]
+
+    user = get_user(user_id)
+
+    if data == "pay_crypto":
+        user["payment_method"] = "crypto"
+        user["step"] = "name"
+        send(chat_id, "Оплата принята ✨\n\nНапиши имя")
         return
 
-    user["payment_method"] = "перевод на карту"
-    user["status"] = "receipt_sent"
+    if data == "pay_card":
+        user["payment_method"] = "card"
+        user["step"] = "waiting_receipt"
+        send(chat_id, f"Переведи {BASIC_UAH} грн\nКарта:\n{CARD_NUMBER}")
+        return
 
-    caption = (
-        "Чек на ручную проверку 💳\n\n"
-        f"Статус: {format_status_label(user['status'])}\n"
-        f"User ID: {user_id}\n"
-        f"Формат: {format_offer_text(user.get('offer'))}\n"
-        f"Оплата: перевод на карту\n"
-        f"Сумма: {format_card_amount_uah(user.get('offer'))} грн"
-    )
+    if data.startswith("read_"):
+        uid = int(data.split("_")[1])
+        u = get_user(uid)
 
-    if ADMIN_CHAT_ID:
-        if media_type == "photo":
-            send_photo(
-                ADMIN_CHAT_ID,
-                file_id,
-                caption=caption,
-                reply_markup=admin_receipt_keyboard(user_id)
-            )
+        send(uid, "Сейчас сделаю разбор ✨")
+
+        text = reading(u)
+        send(uid, text)
+
+        # FOLLOW-UP включаем
+        if u["offer"] == "basic":
+            u["followups_left"] = 1
         else:
-            send_document(
-                ADMIN_CHAT_ID,
-                file_id,
-                caption=caption,
-                reply_markup=admin_receipt_keyboard(user_id)
-            )
+            u["followups_left"] = 2
 
-    send_message(
-        chat_id,
-        "Чек получила ✨\n\n"
-        "Я отправила его на ручную проверку. После подтверждения оплаты напишу тебе."
-    )
+        u["step"] = "followup"
+        u["status"] = "reading_sent"
 
-    user["step"] = "waiting_manual_approval"
+        send(uid, "Можешь задать уточняющий вопрос ✨")
+        return
 
 
-def main():
+# -------- LOOP --------
+
+def run():
     global last_update_id
 
-    print("Bot started...")
-
     while True:
-        try:
-            updates = get_updates()
+        r = requests.get(f"{TELEGRAM_API_URL}/getUpdates", params={
+            "offset": last_update_id,
+            "timeout": 100
+        }).json()
 
-            if "result" not in updates:
-                continue
+        for u in r["result"]:
+            last_update_id = u["update_id"] + 1
 
-            for update in updates["result"]:
-                last_update_id = update["update_id"] + 1
+            if "message" in u:
+                m = u["message"]
+                if m["chat"]["id"] == ADMIN_CHAT_ID:
+                    continue
 
-                if "message" in update:
-                    message = update["message"]
-                    chat_id = message["chat"]["id"]
-                    user_id = message["from"]["id"]
-
-                    if chat_id == ADMIN_CHAT_ID:
-                        continue
-
-                    if "photo" in message:
-                        file_id = message["photo"][-1]["file_id"]
-                        handle_photo_or_document(chat_id, user_id, file_id, "photo")
-                        continue
-
-                    if "document" in message:
-                        file_id = message["document"]["file_id"]
-                        handle_photo_or_document(chat_id, user_id, file_id, "document")
-                        continue
-
-                    text = message.get("text", "").strip()
-
-                    if not text:
-                        continue
-
+                text = m.get("text")
+                if text:
                     if text == "/start":
-                        reset_user_form(user_id)
-                        send_message(
-                            chat_id,
-                            "Привет, я Madame Mira ✨\n\n"
-                            "Расскажи, что сейчас тревожит тебя сильнее всего. Я мягко проведу тебя и помогу почувствовать, куда лучше смотреть дальше."
-                        )
+                        send(m["chat"]["id"], "Привет ✨ Напиши свою ситуацию")
                     else:
-                        handle_user_message(chat_id, user_id, text)
+                        handle_text(m["chat"]["id"], m["from"]["id"], text)
 
-                elif "callback_query" in update:
-                    query = update["callback_query"]
-                    data = query["data"]
-                    callback_chat_id = query["message"]["chat"]["id"]
-                    callback_from_id = query["from"]["id"]
-                    callback_message_id = query["message"]["message_id"]
-
-                    answer_callback_query(query["id"])
-
-                    if data == "show_formats":
-                        send_message(
-                            callback_chat_id,
-                            "Сейчас доступны два формата разбора ✨",
-                            formats_keyboard()
-                        )
-
-                    elif data == "basic_info":
-                        user = get_user_state(callback_from_id)
-                        user["offer"] = "basic"
-                        send_offer_with_invoice(
-                            callback_chat_id,
-                            callback_from_id,
-                            "basic",
-                            "✨ Мини-разбор — $10.\n\n"
-                            "Он подойдёт, если тебе нужен быстрый и точный ответ на один главный вопрос."
-                        )
-
-                    elif data == "deep_info":
-                        user = get_user_state(callback_from_id)
-                        user["offer"] = "deep"
-                        send_offer_with_invoice(
-                            callback_chat_id,
-                            callback_from_id,
-                            "deep",
-                            "🔮 Глубокий разбор — $20.\n\n"
-                            "Он подойдёт, если в ситуации много чувств, подтекста и важно увидеть картину глубже."
-                        )
-
-                    elif data == "help_pick":
-                        user = get_user_state(callback_from_id)
-                        user["step"] = None
-                        user["initial_text"] = ""
-                        user["reply_1"] = ""
-                        send_message(
-                            callback_chat_id,
-                            "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
-                        )
-
-                    elif data == "check_payment":
-                        user = get_user_state(callback_from_id)
-                        status = get_invoice_status(user.get("invoice_id"))
-
-                        if status == "paid":
-                            user["payment_method"] = "крипта"
-                            user["step"] = "waiting_name"
-                            user["status"] = "paid"
-                            send_message(
-                                callback_chat_id,
-                                "Оплату вижу ✅\n\n"
-                                "Теперь давай спокойно соберём заявку.\n\n"
-                                "Сначала напиши своё имя."
-                            )
-                            send_admin_status_note(callback_from_id)
-                        elif status in ["active", "pending"]:
-                            send_message(
-                                callback_chat_id,
-                                "Я ещё не вижу подтверждённую оплату ✨\n\n"
-                                "Если ты уже оплатил(а), подожди 10–20 секунд и нажми «Проверить оплату» ещё раз."
-                            )
-                        else:
-                            send_message(
-                                callback_chat_id,
-                                "Пока не получилось подтвердить оплату.\n\n"
-                                "Попробуй открыть счёт ещё раз или вернись чуть позже."
-                            )
-
-                    elif data == "card_basic":
-                        user = get_user_state(callback_from_id)
-                        user["offer"] = "basic"
-                        user["payment_method"] = "перевод на карту"
-                        user["step"] = "waiting_card_receipt"
-                        send_message(
-                            callback_chat_id,
-                            "💳 Перевод на карту\n\n"
-                            f"Сумма: {BASIC_UAH} грн\n"
-                            f"Карта: {CARD_NUMBER}\n\n"
-                            "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
-                        )
-
-                    elif data == "card_deep":
-                        user = get_user_state(callback_from_id)
-                        user["offer"] = "deep"
-                        user["payment_method"] = "перевод на карту"
-                        user["step"] = "waiting_card_receipt"
-                        send_message(
-                            callback_chat_id,
-                            "💳 Перевод на карту\n\n"
-                            f"Сумма: {DEEP_UAH} грн\n"
-                            f"Карта: {CARD_NUMBER}\n\n"
-                            "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
-                        )
-
-                    elif data.startswith("admin_accept_"):
-                        target_user_id = int(data.split("_")[2])
-                        user = get_user_state(target_user_id)
-                        user["payment_method"] = "перевод на карту"
-                        user["step"] = "waiting_name"
-                        user["status"] = "paid"
-
-                        send_message(
-                            target_user_id,
-                            "Оплата подтверждена ✅\n\n"
-                            "Теперь давай спокойно соберём заявку.\n\n"
-                            "Сначала напиши своё имя."
-                        )
-
-                        try:
-                            if "caption" in query["message"]:
-                                new_caption = query["message"]["caption"] + "\n\nСтатус: 🟢 оплата подтверждена"
-                                edit_message_caption(
-                                    ADMIN_CHAT_ID,
-                                    callback_message_id,
-                                    new_caption,
-                                    reply_markup=None
-                                )
-                            else:
-                                send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🟢 оплата подтверждена")
-                        except Exception:
-                            send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🟢 оплата подтверждена")
-
-                    elif data.startswith("admin_reject_"):
-                        target_user_id = int(data.split("_")[2])
-                        user = get_user_state(target_user_id)
-                        user["step"] = "waiting_card_receipt"
-                        user["status"] = "receipt_rejected"
-
-                        send_message(
-                            target_user_id,
-                            "Я пока не смогла подтвердить оплату ❗\n\n"
-                            "Пожалуйста, проверь перевод и отправь чек ещё раз."
-                        )
-
-                        try:
-                            if "caption" in query["message"]:
-                                new_caption = query["message"]["caption"] + "\n\nСтатус: 🔴 чек отклонён"
-                                edit_message_caption(
-                                    ADMIN_CHAT_ID,
-                                    callback_message_id,
-                                    new_caption,
-                                    reply_markup=None
-                                )
-                            else:
-                                send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🔴 чек отклонён")
-                        except Exception:
-                            send_message(ADMIN_CHAT_ID, f"Статус заявки {target_user_id}: 🔴 чек отклонён")
-
-                    elif data.startswith("admin_reading_"):
-                        target_user_id = int(data.split("_")[2])
-                        user = get_user_state(target_user_id)
-
-                        if user.get("status") == "reading_sent":
-                            send_message(
-                                ADMIN_CHAT_ID,
-                                f"Разбор для {target_user_id} уже был отправлен ✨"
-                            )
-                            continue
-
-                        send_message(
-                            target_user_id,
-                            "Я вхожу в твою ситуацию глубже ✨\n\n"
-                            "Сейчас соберу для тебя сам разбор."
-                        )
-
-                        reading_text = gpt_make_reading(user)
-                        send_message(target_user_id, reading_text)
-
-                        user["status"] = "reading_sent"
-
-                        try:
-                            new_text = query["message"]["text"] + "\n\nСтатус: ✨ разбор отправлен"
-                            edit_message(
-                                ADMIN_CHAT_ID,
-                                callback_message_id,
-                                new_text,
-                                reply_markup=None
-                            )
-                        except Exception:
-                            send_message(
-                                ADMIN_CHAT_ID,
-                                f"Статус заявки {target_user_id}: ✨ разбор отправлен"
-                            )
-
-        except Exception as e:
-            print("RUNTIME ERROR:", str(e))
+            if "callback_query" in u:
+                handle_callback(u["callback_query"])
 
 
 if __name__ == "__main__":
-    main()
+    run()
