@@ -7,6 +7,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CARD_NUMBER = os.getenv("CARD_NUMBER", "1111 2222 3333 4444")
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TOKEN}"
 CRYPTO_API_URL = "https://pay.crypt.bot/api"
@@ -15,6 +16,10 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 last_update_id = None
 USER_STATE = {}
+
+# Округленные суммы в гривнах
+CARD_BASIC_UAH = 440
+CARD_DEEP_UAH = 880
 
 
 def get_updates():
@@ -32,6 +37,26 @@ def send_message(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = reply_markup
     requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
+
+
+def send_photo(chat_id, file_id, caption=None):
+    payload = {
+        "chat_id": chat_id,
+        "photo": file_id
+    }
+    if caption:
+        payload["caption"] = caption
+    requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=payload, timeout=30)
+
+
+def send_document(chat_id, file_id, caption=None):
+    payload = {
+        "chat_id": chat_id,
+        "document": file_id
+    }
+    if caption:
+        payload["caption"] = caption
+    requests.post(f"{TELEGRAM_API_URL}/sendDocument", data=payload, timeout=30)
 
 
 def answer_callback_query(callback_query_id, text=None):
@@ -58,14 +83,14 @@ def get_user_state(user_id):
         USER_STATE[user_id] = {
             "step": None,
             "offer": None,
+            "payment_method": None,
             "name": "",
             "situation": "",
             "question": "",
             "invoice_id": None,
             "invoice_url": None,
             "initial_text": "",
-            "reply_1": "",
-            "reply_2": ""
+            "reply_1": ""
         }
     return USER_STATE[user_id]
 
@@ -74,14 +99,14 @@ def reset_user_form(user_id):
     USER_STATE[user_id] = {
         "step": None,
         "offer": None,
+        "payment_method": None,
         "name": "",
         "situation": "",
         "question": "",
         "invoice_id": None,
         "invoice_url": None,
         "initial_text": "",
-        "reply_1": "",
-        "reply_2": ""
+        "reply_1": ""
     }
 
 
@@ -95,11 +120,12 @@ def formats_keyboard():
     }
 
 
-def payment_keyboard(invoice_url):
+def payment_keyboard(invoice_url, offer):
     return {
         "inline_keyboard": [
-            [{"text": "💸 Оплатить", "url": invoice_url}],
+            [{"text": "💸 Оплатить криптой", "url": invoice_url}],
             [{"text": "✅ Проверить оплату", "callback_data": "check_payment"}],
+            [{"text": "💳 Перевод на карту", "callback_data": f"card_{offer}"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
         ]
     }
@@ -110,21 +136,20 @@ def choose_offer_local(text: str):
 
     strong_deep_keywords = [
         "измена", "предательство", "ушел к другой", "ушёл к другой",
-        "развод", "любовный треугольник", "предал", "предательство",
-        "бросил", "муж ушел", "муж ушёл", "другая женщина", "другой мужчина"
+        "развод", "любовный треугольник", "предал", "бросил", "другая женщина"
     ]
 
     medium_deep_keywords = [
         "отнош", "парень", "муж", "бывш", "ушел", "ушёл", "другая", "другой",
         "любов", "чувства", "больно", "сложно", "тяжело", "кризис",
         "расстав", "ревность", "запутал", "запуталась", "запутался",
-        "не понимаю", "что делать", "будущее", "судьба", "подруга",
-        "одиночество", "не складываются", "страдаю", "потеряла"
+        "не понимаю", "что делать", "будущее", "подруга", "одиночество",
+        "не складываются", "страдаю", "потеряла"
     ]
 
     basic_keywords = [
         "быстро", "кратко", "коротко", "мини", "один вопрос",
-        "простой вопрос", "быстрый ответ", "короткий ответ", "один главный вопрос"
+        "простой вопрос", "быстрый ответ", "короткий ответ"
     ]
 
     deep_score = 0
@@ -147,7 +172,6 @@ def choose_offer_local(text: str):
     elif len(t) < 60:
         basic_score += 1
 
-    # Подталкиваем к cheaper по умолчанию
     if deep_score >= 4:
         return "deep"
 
@@ -180,7 +204,7 @@ def gpt_json(prompt, fallback):
 def gpt_first_reply(user_text: str):
     prompt = f"""
 Ты — Madame Mira.
-Стиль: женственный, мягкий, мистический, дорогой, тёплый, но естественный.
+Стиль: женственный, мягкий, мистический, тёплый.
 
 Нужно написать ПЕРВОЕ сообщение после того, как человек поделился ситуацией.
 
@@ -190,9 +214,8 @@ def gpt_first_reply(user_text: str):
 3. Задай ОДИН тёплый вопрос.
 4. Не продавай.
 5. Не упоминай оплату, цены, форматы.
-6. Коротко, красиво, по-человечески.
-7. На русском.
-8. Не используй списки.
+6. На русском.
+7. Коротко и красиво.
 
 Верни строго JSON:
 {{
@@ -204,87 +227,13 @@ def gpt_first_reply(user_text: str):
 """.strip()
 
     fallback = {
-        "message": "Я чувствую, что за этими словами стоит не просто вопрос, а усталость сердца ✨\n\nСкажи, что ранит сильнее всего: сама ситуация или то, что внутри до сих пор нет ясности?"
+        "message": "Я чувствую, что за этими словами стоит усталость сердца ✨\n\nСкажи, что ранит сильнее: сама ситуация или то, что внутри до сих пор нет ясности?"
     }
 
     return gpt_json(prompt, fallback)
 
 
-def gpt_second_reply(initial_text: str, reply_1: str):
-    prompt = f"""
-Ты — Madame Mira.
-Стиль: женственный, мистический, мягкий, живой, премиальный.
-
-Нужно написать ВТОРОЕ сообщение в диалоге.
-У тебя уже есть:
-1. первое сообщение клиента
-2. его ответ на первый вопрос
-
-Задача:
-1. Мягко углубить разговор
-2. Дать ощущение, что ты почувствовала суть
-3. Добавить лёгкий эффект угадывания
-4. Задать ещё один короткий вопрос
-5. Не продавать
-6. Не упоминать услуги, форматы, цены
-7. На русском
-8. Коротко и красиво
-
-Верни строго JSON:
-{{
-  "message": "текст"
-}}
-
-Первое сообщение:
-{initial_text}
-
-Ответ человека:
-{reply_1}
-""".strip()
-
-    fallback = {
-        "message": "Я тебя чувствую ✨\n\nПохоже, здесь боль не только в самом человеке, а ещё и в том, что внутри слишком долго нет опоры.\n\nСкажи, тебе сейчас важнее понять, есть ли у этой истории будущее, или вернуть себе внутреннюю ясность?"
-    }
-
-    return gpt_json(prompt, fallback)
-
-
-def gpt_pre_offer_reply(initial_text: str, reply_1: str, reply_2: str):
-    prompt = f"""
-Ты — Madame Mira.
-Стиль: женственный, мягкий, мистический, премиальный.
-
-Нужно написать ТРЕТЬЕ сообщение перед продажей.
-
-Задача:
-1. Дать мини-инсайт
-2. Показать, что ты уловила суть
-3. Создать доверие
-4. Не называть цену
-5. Не вставлять кнопки
-6. Подвести к тому, что ты можешь помочь ясностью
-7. На русском
-8. Коротко и красиво
-
-Верни строго JSON:
-{{
-  "message": "текст"
-}}
-
-Диалог:
-Первое сообщение: {initial_text}
-Ответ 1: {reply_1}
-Ответ 2: {reply_2}
-""".strip()
-
-    fallback = {
-        "message": "Я уже чувствую основной узел этой истории ✨\n\nЗдесь проблема не только в событиях снаружи, а в том, что внутри слишком долго не было ясности.\n\nА ясность сейчас как раз может вернуть тебе опору."
-    }
-
-    return gpt_json(prompt, fallback)
-
-
-def gpt_recommend(initial_text: str, reply_1: str, reply_2: str):
+def gpt_recommend(initial_text: str, reply_1: str):
     prompt = f"""
 Ты — Madame Mira.
 Стиль: женственный, мягкий, мистический, премиальный.
@@ -313,11 +262,10 @@ def gpt_recommend(initial_text: str, reply_1: str, reply_2: str):
 
 Диалог:
 Первое сообщение: {initial_text}
-Ответ 1: {reply_1}
-Ответ 2: {reply_2}
+Ответ человека: {reply_1}
 """.strip()
 
-    fallback_offer = choose_offer_local(f"{initial_text} {reply_1} {reply_2}")
+    fallback_offer = choose_offer_local(f"{initial_text} {reply_1}")
 
     if fallback_offer == "basic":
         fallback = {
@@ -327,11 +275,10 @@ def gpt_recommend(initial_text: str, reply_1: str, reply_2: str):
     else:
         fallback = {
             "offer": "deep",
-            "message": "Я бы повела тебя в 🔮 Глубокий разбор за $20.\n\nПотому что здесь чувствуется не один вопрос, а более глубокий внутренний узел, который лучше раскрывать шире."
+            "message": "Я бы повела тебя в 🔮 Глубокий разбор за $20.\n\nПотому что здесь чувствуется более глубокий внутренний узел, который лучше раскрывать шире."
         }
 
     data = gpt_json(prompt, fallback)
-
     offer = data.get("offer", fallback["offer"])
     message = data.get("message", fallback["message"])
 
@@ -438,12 +385,13 @@ def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     user["invoice_id"] = invoice["invoice_id"]
     user["invoice_url"] = invoice["invoice_url"]
 
-    send_message(chat_id, intro_text, payment_keyboard(invoice["invoice_url"]))
+    send_message(chat_id, intro_text, payment_keyboard(invoice["invoice_url"], offer))
 
 
 def finish_application(chat_id, user_id):
     user = get_user_state(user_id)
     offer_text = format_offer_text(user["offer"])
+    payment_method = user.get("payment_method", "не указан")
 
     send_message(
         chat_id,
@@ -457,6 +405,7 @@ def finish_application(chat_id, user_id):
         "Новая заявка в Madame Mira 💸\n\n"
         f"User ID: {user_id}\n"
         f"Формат: {offer_text}\n"
+        f"Оплата: {payment_method}\n"
         f"Имя: {user['name']}\n\n"
         f"Ситуация:\n{user['situation']}\n\n"
         f"Что хочет понять:\n{user['question']}\n\n"
@@ -487,27 +436,26 @@ def handle_user_message(chat_id, user_id, text):
         finish_application(chat_id, user_id)
         return
 
-    if user["step"] == "waiting_clarify_1":
-        user["reply_1"] = text
-        second = gpt_second_reply(user["initial_text"], text)
-        user["step"] = "waiting_clarify_2"
-        send_message(chat_id, second["message"])
+    if user["step"] == "waiting_card_receipt_text":
+        notify_admin(
+            "Запрос на ручную проверку оплаты 💳\n\n"
+            f"User ID: {user_id}\n"
+            f"Формат: {format_offer_text(user.get('offer'))}\n"
+            f"Сообщение клиента:\n{text}"
+        )
+        send_message(
+            chat_id,
+            "Я передала подтверждение на ручную проверку ✨\n\n"
+            "Как только оплата будет проверена, можно будет перейти к разбору."
+        )
+        user["step"] = "waiting_manual_approval"
         return
 
-    if user["step"] == "waiting_clarify_2":
-        user["reply_2"] = text
-        pre_offer = gpt_pre_offer_reply(
-            user["initial_text"],
-            user["reply_1"],
-            user["reply_2"]
-        )
-        send_message(chat_id, pre_offer["message"])
+    if user["step"] == "waiting_clarify_1":
+        user["reply_1"] = text
 
-        result = gpt_recommend(
-            user["initial_text"],
-            user["reply_1"],
-            user["reply_2"]
-        )
+        # Быстрее: сразу рекомендация после второго сообщения пользователя
+        result = gpt_recommend(user["initial_text"], text)
         user["step"] = "offer_ready"
         send_offer_with_invoice(chat_id, user_id, result["offer"], result["message"])
         return
@@ -516,6 +464,39 @@ def handle_user_message(chat_id, user_id, text):
     first = gpt_first_reply(text)
     user["step"] = "waiting_clarify_1"
     send_message(chat_id, first["message"])
+
+
+def handle_photo_or_document(chat_id, user_id, file_id, media_type):
+    user = get_user_state(user_id)
+
+    if user["step"] != "waiting_card_receipt":
+        send_message(
+            chat_id,
+            "Я увидела файл ✨\n\nЕсли это не чек по оплате, просто продолжай диалог."
+        )
+        return
+
+    caption = (
+        "Чек на ручную проверку 💳\n\n"
+        f"User ID: {user_id}\n"
+        f"Формат: {format_offer_text(user.get('offer'))}\n"
+        f"Оплата: перевод на карту"
+    )
+
+    if ADMIN_CHAT_ID:
+        if media_type == "photo":
+            send_photo(ADMIN_CHAT_ID, file_id, caption)
+        else:
+            send_document(ADMIN_CHAT_ID, file_id, caption)
+
+    send_message(
+        chat_id,
+        "Чек получила ✨\n\n"
+        "Я отправила его на ручную проверку. После подтверждения оплаты можно будет переходить к разбору."
+    )
+
+    user["payment_method"] = "перевод на карту"
+    user["step"] = "waiting_manual_approval"
 
 
 def main():
@@ -534,9 +515,21 @@ def main():
                 last_update_id = update["update_id"] + 1
 
                 if "message" in update:
-                    chat_id = update["message"]["chat"]["id"]
-                    user_id = update["message"]["from"]["id"]
-                    text = update["message"].get("text", "").strip()
+                    message = update["message"]
+                    chat_id = message["chat"]["id"]
+                    user_id = message["from"]["id"]
+
+                    if "photo" in message:
+                        file_id = message["photo"][-1]["file_id"]
+                        handle_photo_or_document(chat_id, user_id, file_id, "photo")
+                        continue
+
+                    if "document" in message:
+                        file_id = message["document"]["file_id"]
+                        handle_photo_or_document(chat_id, user_id, file_id, "document")
+                        continue
+
+                    text = message.get("text", "").strip()
 
                     if not text:
                         continue
@@ -588,7 +581,6 @@ def main():
                         user["step"] = None
                         user["initial_text"] = ""
                         user["reply_1"] = ""
-                        user["reply_2"] = ""
                         send_message(
                             chat_id,
                             "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
@@ -598,6 +590,7 @@ def main():
                         status = get_invoice_status(user.get("invoice_id"))
 
                         if status == "paid":
+                            user["payment_method"] = "крипта"
                             user["step"] = "waiting_name"
                             send_message(
                                 chat_id,
@@ -613,6 +606,30 @@ def main():
                                 chat_id,
                                 "Пока не получилось подтвердить оплату.\n\nПопробуй открыть счёт ещё раз или вернись чуть позже."
                             )
+
+                    elif data == "card_basic":
+                        user["offer"] = "basic"
+                        user["payment_method"] = "перевод на карту"
+                        user["step"] = "waiting_card_receipt"
+                        send_message(
+                            chat_id,
+                            "💳 Перевод на карту\n\n"
+                            f"Сумма: {CARD_BASIC_UAH} грн\n"
+                            f"Карта: {CARD_NUMBER}\n\n"
+                            "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
+                        )
+
+                    elif data == "card_deep":
+                        user["offer"] = "deep"
+                        user["payment_method"] = "перевод на карту"
+                        user["step"] = "waiting_card_receipt"
+                        send_message(
+                            chat_id,
+                            "💳 Перевод на карту\n\n"
+                            f"Сумма: {CARD_DEEP_UAH} грн\n"
+                            f"Карта: {CARD_NUMBER}\n\n"
+                            "После перевода пришли сюда фото или скрин чека. Я отправлю его на ручную проверку ✨"
+                        )
 
         except Exception as e:
             print("RUNTIME ERROR:", str(e))
