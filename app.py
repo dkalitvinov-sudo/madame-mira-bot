@@ -59,14 +59,22 @@ def send_message(chat_id, text, reply_markup=None):
 
 
 def edit_message(chat_id, message_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text
+    }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     tg_post("editMessageText", payload=payload)
 
 
 def edit_message_caption(chat_id, message_id, caption, reply_markup=None):
-    payload = {"chat_id": chat_id, "message_id": message_id, "caption": caption}
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "caption": caption
+    }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     tg_post("editMessageCaption", payload=payload)
@@ -120,6 +128,8 @@ def get_user(user_id):
             "question": "",
             "initial_text": "",
             "reply_1": "",
+            "focus": None,
+            "topic_class": None,
             "invoice_id": None,
             "invoice_url": None,
             "payment_method": None,
@@ -145,6 +155,8 @@ def reset_user(user_id, source="direct"):
         "question": "",
         "initial_text": "",
         "reply_1": "",
+        "focus": None,
+        "topic_class": None,
         "invoice_id": None,
         "invoice_url": None,
         "payment_method": None,
@@ -171,7 +183,19 @@ def formats_keyboard():
             [{"text": "✨ Мини-разбор $10", "callback_data": "basic_info"}],
             [{"text": "🔮 Глубокий разбор $20", "callback_data": "deep_info"}],
             [{"text": "💎 VIP-разбор $50", "callback_data": "vip_info"}],
+            [{"text": "📖 Что входит в форматы", "callback_data": "show_format_details"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
+        ]
+    }
+
+
+def focus_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "❤️ Понять чувства человека", "callback_data": "focus_feelings"}],
+            [{"text": "🔮 Увидеть будущее ситуации", "callback_data": "focus_future"}],
+            [{"text": "🪞 Разобраться в себе", "callback_data": "focus_self"}],
+            [{"text": "🧭 Понять, что делать дальше", "callback_data": "focus_action"}]
         ]
     }
 
@@ -182,6 +206,7 @@ def payment_keyboard(invoice_url, offer):
             [{"text": "💸 Оплатить криптой", "url": invoice_url}],
             [{"text": "✅ Проверить оплату", "callback_data": "check_payment"}],
             [{"text": "💳 Перевод на карту", "callback_data": f"card_{offer}"}],
+            [{"text": "📖 Что входит в формат", "callback_data": f"details_{offer}"}],
             [{"text": "💬 Помоги выбрать", "callback_data": "help_pick"}]
         ]
     }
@@ -221,7 +246,86 @@ def vip_keyboard():
     }
 
 
-def choose_offer_local(text: str):
+def format_offer_text(offer):
+    return {
+        "basic": "Мини-разбор $10",
+        "deep": "Глубокий разбор $20",
+        "vip": "VIP-разбор $50"
+    }.get(offer, "Не выбран")
+
+
+def format_card_amount_uah(offer):
+    return {
+        "basic": BASIC_UAH,
+        "deep": DEEP_UAH,
+        "vip": VIP_UAH
+    }.get(offer, BASIC_UAH)
+
+
+def format_status_label(status):
+    return {
+        "new": "⚪ новая",
+        "receipt_sent": "🟡 чек получен",
+        "receipt_rejected": "🔴 чек отклонён",
+        "paid": "🟢 оплата подтверждена",
+        "submitted": "🟣 заявка собрана",
+        "reading_sent": "✨ разбор отправлен"
+    }.get(status, "⚪ новая")
+
+
+def send_admin_status_note(user_id):
+    user = get_user(user_id)
+    send_message(
+        ADMIN_CHAT_ID,
+        f"Статус заявки {user_id}: {format_status_label(user.get('status'))}"
+    )
+
+
+def format_details_text():
+    return (
+        "Форматы Madame Mira ✨\n\n"
+        "✨ Мини-разбор $10\n"
+        "Подойдёт, если тебе нужен быстрый и точный ответ на главный вопрос.\n"
+        "Внутри: сам разбор + 1 уточняющий вопрос после.\n\n"
+        "🔮 Глубокий разбор $20\n"
+        "Подойдёт, если ситуация эмоциональная, сложная или запутанная.\n"
+        "Внутри: более глубокий разбор + 2 уточняющих вопроса.\n\n"
+        "💎 VIP-разбор $50\n"
+        "Подойдёт, если тебе нужен не просто ответ, а более внимательное сопровождение.\n"
+        "Внутри: самый глубокий формат + 3 уточняющих вопроса + более тонкое ведение."
+    )
+
+
+def single_format_details(offer):
+    if offer == "basic":
+        return (
+            "✨ Мини-разбор $10\n\n"
+            "Что ты получишь:\n"
+            "• быстрый и точный ответ на главный вопрос\n"
+            "• личный разбор по твоей ситуации\n"
+            "• 1 уточняющий вопрос после разбора\n\n"
+            "Подойдёт, если тебе нужна ясность без долгого погружения."
+        )
+    if offer == "deep":
+        return (
+            "🔮 Глубокий разбор $20\n\n"
+            "Что ты получишь:\n"
+            "• более глубокое чтение ситуации\n"
+            "• раскрытие внутреннего узла истории\n"
+            "• 2 уточняющих вопроса после разбора\n\n"
+            "Подойдёт, если ситуация сложная, эмоциональная или многослойная."
+        )
+    return (
+        "💎 VIP-разбор $50\n\n"
+        "Что ты получишь:\n"
+        "• самый глубокий формат разбора\n"
+        "• более внимательное сопровождение\n"
+        "• 3 уточняющих вопроса после разбора\n\n"
+        "Подойдёт, если тебе нужен не просто ответ, а более тонкая и глубокая работа."
+    )
+
+
+def choose_offer_local(text: str, focus: str = None):
     t = text.lower().strip()
 
     strong_deep = [
@@ -260,6 +364,15 @@ def choose_offer_local(text: str):
     for word in basic_keywords:
         if word in t:
             basic_score += 2
+
+    if focus == "future":
+        deep_score += 1
+    elif focus == "feelings":
+        deep_score += 1
+    elif focus == "action":
+        basic_score += 1
+    elif focus == "self":
+        deep_score += 1
 
     if len(t) > 250:
         vip_score += 1
@@ -304,6 +417,80 @@ def gpt_json(prompt, fallback):
         return fallback
 
 
+def classify_topic(user_text: str):
+    fallback = {"topic": "relationship", "supported": True}
+
+    medical_words = ["живот", "болит", "температура", "врач", "тошнит", "таблет", "здоров", "болезн"]
+    if any(w in user_text.lower() for w in medical_words):
+        return {"topic": "medical", "supported": False}
+
+    prompt = f"""
+Определи тему сообщения пользователя.
+
+Варианты topic:
+- relationship
+- emotional
+- medical
+- legal
+- finance
+- technical
+- other
+
+supported:
+- true, если бот Madame Mira может уместно помочь как бот про отношения, чувства, внутреннюю ясность, эмоциональные ситуации
+- false, если тема не его компетенция
+
+Верни строго JSON:
+{{
+  "topic": "...",
+  "supported": true
+}}
+
+Сообщение:
+{user_text}
+"""
+    data = gpt_json(prompt, fallback)
+    topic = data.get("topic", "relationship")
+    supported = bool(data.get("supported", True))
+
+    if topic in ["medical", "legal", "finance", "technical", "other"] and topic != "emotional":
+        supported = False
+
+    return {"topic": topic, "supported": supported}
+
+
+def unsupported_reply(user_text: str, topic: str):
+    if topic == "medical":
+        return (
+            "Я честно скажу: я не лучший помощник в медицинских вопросах ✨\n\n"
+            "Если у тебя болит живот или есть симптомы по здоровью, лучше обратиться к врачу.\n\n"
+            "Я больше про отношения, чувства, внутреннюю ясность и эмоциональные ситуации. Если хочешь, я могу помочь тебе именно с этим."
+        )
+    if topic == "legal":
+        return (
+            "Я честно скажу: юридические вопросы не моя сильная сторона ✨\n\n"
+            "С такими темами лучше идти к профильному специалисту.\n\n"
+            "Я больше помогаю там, где речь про отношения, чувства, внутренние переживания и сложные эмоциональные истории."
+        )
+    if topic == "finance":
+        return (
+            "Я честно скажу: финансовые вопросы не моя зона экспертности ✨\n\n"
+            "Я больше про отношения, эмоциональную ясность и внутренние состояния.\n\n"
+            "Если хочешь, можешь рассказать о своей истории именно с этой стороны."
+        )
+    if topic == "technical":
+        return (
+            "С техническими вопросами я не самый точный проводник ✨\n\n"
+            "Моя сила больше в отношениях, чувствах, внутренней ясности и сложных эмоциональных ситуациях.\n\n"
+            "Если хочешь, расскажи, что у тебя сейчас происходит именно на этом уровне."
+        )
+    return (
+        "Я честно скажу: это не совсем моя зона глубины ✨\n\n"
+        "Я больше про отношения, чувства, внутреннюю ясность и эмоциональные истории.\n\n"
+        "Если хочешь, можешь рассказать свою ситуацию именно с этой стороны."
+    )
+
+
 def first_reply(user_text: str):
     prompt = f"""
 Ты — Madame Mira.
@@ -329,8 +516,8 @@ def first_reply(user_text: str):
     return gpt_text(prompt, fallback)
 
 
-def recommend_offer(initial_text: str, reply_1: str):
-    fallback_offer = choose_offer_local(f"{initial_text} {reply_1}")
+def recommend_offer(initial_text: str, reply_1: str, focus: str):
+    fallback_offer = choose_offer_local(f"{initial_text} {reply_1}", focus=focus)
     fallback_map = {
         "basic": {
             "offer": "basic",
@@ -355,6 +542,9 @@ def recommend_offer(initial_text: str, reply_1: str):
 - basic = Мини-разбор $10
 - deep = Глубокий разбор $20
 - vip = VIP-разбор $50
+
+Фокус пользователя:
+{focus}
 
 Правила:
 - basic выбирай чаще по умолчанию
@@ -408,6 +598,7 @@ def make_reading(user):
 
 Имя: {user.get("name")}
 Формат: {offer_text}
+Фокус: {user.get("focus")}
 Ситуация: {user.get("situation")}
 Что хочет понять: {user.get("question")}
 """
@@ -434,6 +625,7 @@ def make_followup_answer(user, followup_question):
 
 Формат клиента: {format_offer_text(user.get("offer"))}
 Имя: {user.get("name")}
+Фокус: {user.get("focus")}
 Ситуация: {user.get("situation")}
 Главный вопрос: {user.get("question")}
 Уточняющий вопрос: {followup_question}
@@ -505,41 +697,6 @@ def get_invoice_status(invoice_id):
         return None
 
 
-def format_offer_text(offer):
-    return {
-        "basic": "Мини-разбор $10",
-        "deep": "Глубокий разбор $20",
-        "vip": "VIP-разбор $50"
-    }.get(offer, "Не выбран")
-
-
-def format_card_amount_uah(offer):
-    return {
-        "basic": BASIC_UAH,
-        "deep": DEEP_UAH,
-        "vip": VIP_UAH
-    }.get(offer, BASIC_UAH)
-
-
-def format_status_label(status):
-    return {
-        "new": "⚪ новая",
-        "receipt_sent": "🟡 чек получен",
-        "receipt_rejected": "🔴 чек отклонён",
-        "paid": "🟢 оплата подтверждена",
-        "submitted": "🟣 заявка собрана",
-        "reading_sent": "✨ разбор отправлен"
-    }.get(status, "⚪ новая")
-
-
-def send_admin_status_note(user_id):
-    user = get_user(user_id)
-    send_message(
-        ADMIN_CHAT_ID,
-        f"Статус заявки {user_id}: {format_status_label(user.get('status'))}"
-    )
-
-
 def send_offer_with_invoice(chat_id, user_id, offer, intro_text):
     user = get_user(user_id)
     user["offer"] = offer
@@ -574,6 +731,7 @@ def finish_application(chat_id, user_id):
         f"Формат: {format_offer_text(user['offer'])}\n"
         f"Оплата: {user.get('payment_method', 'не указан')}\n"
         f"Источник: {user.get('source', 'direct')}\n"
+        f"Фокус: {user.get('focus', 'не выбран')}\n"
         f"Имя: {user['name']}\n\n"
         f"Ситуация:\n{user['situation']}\n\n"
         f"Что хочет понять:\n{user['question']}\n\n"
@@ -587,6 +745,75 @@ def finish_application(chat_id, user_id):
     })
 
     user["status"] = "submitted"
+
+
+def stats_text():
+    total_users = len(ANALYTICS["total_users"])
+    sources = ANALYTICS["sources"]
+    source_lines = []
+    for key, value in sorted(sources.items(), key=lambda x: x[1], reverse=True):
+        source_lines.append(f"{key}: {value}")
+    source_block = "\n".join(source_lines) if source_lines else "нет данных"
+
+    return (
+        "Статистика Madame Mira 📊\n\n"
+        f"Всего пользователей: {total_users}\n"
+        f"Оплат mini: {ANALYTICS['paid_basic']}\n"
+        f"Оплат deep: {ANALYTICS['paid_deep']}\n"
+        f"Оплат VIP: {ANALYTICS['paid_vip']}\n"
+        f"Чеков на карту: {ANALYTICS['receipts_sent']}\n"
+        f"Разборов отправлено: {ANALYTICS['readings_sent']}\n\n"
+        "Источники:\n"
+        f"{source_block}"
+    )
+
+
+def process_warmups():
+    current = now_ts()
+
+    for user_id, user in USER_STATE.items():
+        step = user.get("step")
+        status = user.get("status")
+        last_activity = user.get("last_activity", current)
+
+        if status == "new" and step in ["waiting_clarify_1", "waiting_focus", "offer_ready", None]:
+            if user["warmup_stage"] == 0 and current - last_activity >= WARMUP_1_DELAY:
+                send_message(
+                    user_id,
+                    "Я всё ещё чувствую незавершённость в твоей истории ✨\n\n"
+                    "Там есть важный внутренний момент, который мы пока не раскрыли."
+                )
+                user["warmup_stage"] = 1
+
+            elif user["warmup_stage"] == 1 and current - last_activity >= WARMUP_2_DELAY:
+                send_message(
+                    user_id,
+                    "Иногда сердце не отпускает тему просто так 💫\n\n"
+                    "Если ты всё ещё в этой истории, я рядом."
+                )
+                user["warmup_stage"] = 2
+
+        if user.get("status") == "reading_sent" and user.get("offer") == "basic":
+            sent_at = user.get("reading_sent_at")
+            if sent_at and not user.get("upsell_sent") and current - sent_at >= UPSELL_DELAY:
+                send_message(
+                    user_id,
+                    "Я чувствую, что в твоей истории есть ещё слой глубже ✨\n\n"
+                    "Если хочешь, я могу раскрыть ситуацию шире и показать больше, чем вошло в мини-разбор.",
+                    upsell_keyboard()
+                )
+                user["upsell_sent"] = True
+
+        if user.get("status") == "reading_sent" and user.get("offer") == "deep":
+            sent_at = user.get("reading_sent_at")
+            if sent_at and not user.get("vip_offer_sent") and current - sent_at >= UPSELL_DELAY:
+                send_message(
+                    user_id,
+                    "Иногда после глубокого разбора становится видно, что нужна не только ясность, но и более тонкое сопровождение 💎\n\n"
+                    "Если захочешь, я могу взять тебя в VIP-формат.",
+                    vip_keyboard()
+                )
+                user["vip_offer_sent"] = True
 
 
 def handle_user_message(chat_id, user_id, text):
@@ -653,9 +880,20 @@ def handle_user_message(chat_id, user_id, text):
 
     if user["step"] == "waiting_clarify_1":
         user["reply_1"] = text
-        result = recommend_offer(user["initial_text"], text)
-        user["step"] = "offer_ready"
-        send_offer_with_invoice(chat_id, user_id, result["offer"], result["message"])
+        user["step"] = "waiting_focus"
+        send_message(
+            chat_id,
+            "Скажи, что тебе сейчас важнее всего ✨",
+            focus_keyboard()
+        )
+        return
+
+    topic_data = classify_topic(text)
+    user["topic_class"] = topic_data["topic"]
+
+    if not topic_data["supported"]:
+        send_message(chat_id, unsupported_reply(text, topic_data["topic"]))
+        user["step"] = None
         return
 
     user["initial_text"] = text
@@ -697,75 +935,6 @@ def handle_photo_or_document(chat_id, user_id, file_id, media_type):
     )
 
     user["step"] = "waiting_manual_approval"
-
-
-def process_warmups():
-    current = now_ts()
-
-    for user_id, user in USER_STATE.items():
-        step = user.get("step")
-        status = user.get("status")
-        last_activity = user.get("last_activity", current)
-
-        if status == "new" and step in ["waiting_clarify_1", "offer_ready", None]:
-            if user["warmup_stage"] == 0 and current - last_activity >= WARMUP_1_DELAY:
-                send_message(
-                    user_id,
-                    "Я ещё чувствую незавершённость в твоей истории ✨\n\n"
-                    "Там есть важный внутренний слой, который мы пока не раскрыли."
-                )
-                user["warmup_stage"] = 1
-
-            elif user["warmup_stage"] == 1 and current - last_activity >= WARMUP_2_DELAY:
-                send_message(
-                    user_id,
-                    "Иногда сердце не уходит из темы просто так 💫\n\n"
-                    "Если ты всё ещё в этой истории, я рядом."
-                )
-                user["warmup_stage"] = 2
-
-        if user.get("status") == "reading_sent" and user.get("offer") == "basic":
-            sent_at = user.get("reading_sent_at")
-            if sent_at and not user.get("upsell_sent") and current - sent_at >= UPSELL_DELAY:
-                send_message(
-                    user_id,
-                    "Я чувствую, что в твоей истории есть ещё слой глубже ✨\n\n"
-                    "Если хочешь, я могу раскрыть её шире и помочь тебе увидеть больше, чем вошло в мини-разбор.",
-                    upsell_keyboard()
-                )
-                user["upsell_sent"] = True
-
-        if user.get("status") == "reading_sent" and user.get("offer") == "deep":
-            sent_at = user.get("reading_sent_at")
-            if sent_at and not user.get("vip_offer_sent") and current - sent_at >= UPSELL_DELAY:
-                send_message(
-                    user_id,
-                    "Иногда после глубокого разбора становится видно, что нужна не только ясность, но и более тонкое сопровождение 💎\n\n"
-                    "Если захочешь, я могу взять тебя в VIP-формат.",
-                    vip_keyboard()
-                )
-                user["vip_offer_sent"] = True
-
-
-def stats_text():
-    total_users = len(ANALYTICS["total_users"])
-    sources = ANALYTICS["sources"]
-    source_lines = []
-    for key, value in sorted(sources.items(), key=lambda x: x[1], reverse=True):
-        source_lines.append(f"{key}: {value}")
-    source_block = "\n".join(source_lines) if source_lines else "нет данных"
-
-    return (
-        "Статистика Madame Mira 📊\n\n"
-        f"Всего пользователей: {total_users}\n"
-        f"Оплат mini: {ANALYTICS['paid_basic']}\n"
-        f"Оплат deep: {ANALYTICS['paid_deep']}\n"
-        f"Оплат VIP: {ANALYTICS['paid_vip']}\n"
-        f"Чеков на карту: {ANALYTICS['receipts_sent']}\n"
-        f"Разборов отправлено: {ANALYTICS['readings_sent']}\n\n"
-        "Источники:\n"
-        f"{source_block}"
-    )
 
 
 def main():
@@ -835,6 +1004,33 @@ def main():
                     if data == "show_formats":
                         send_message(callback_chat_id, "Сейчас доступны три формата ✨", formats_keyboard())
 
+                    elif data == "show_format_details":
+                        send_message(callback_chat_id, format_details_text())
+
+                    elif data.startswith("details_"):
+                        offer = data.split("_")[1]
+                        send_message(callback_chat_id, single_format_details(offer))
+
+                    elif data in ["focus_feelings", "focus_future", "focus_self", "focus_action"]:
+                        user = get_user(callback_from_id)
+                        focus_map = {
+                            "focus_feelings": ("feelings", "понять чувства человека"),
+                            "focus_future": ("future", "увидеть будущее ситуации"),
+                            "focus_self": ("self", "разобраться в себе"),
+                            "focus_action": ("action", "понять, что делать дальше")
+                        }
+                        focus_code, focus_label = focus_map[data]
+                        user["focus"] = focus_code
+
+                        result = recommend_offer(user["initial_text"], user["reply_1"], focus_code)
+                        user["step"] = "offer_ready"
+
+                        send_message(
+                            callback_chat_id,
+                            f"Я услышала: тебе сейчас важнее {focus_label} ✨\n\n{result['message']}"
+                        )
+                        send_offer_with_invoice(callback_chat_id, callback_from_id, result["offer"], "Вот формат, который я бы сейчас тебе предложила:")
+
                     elif data in ["basic_info", "deep_info", "vip_info"]:
                         user = get_user(callback_from_id)
                         offer = {
@@ -852,12 +1048,10 @@ def main():
 
                     elif data == "help_pick":
                         user = get_user(callback_from_id)
-                        user["step"] = None
-                        user["initial_text"] = ""
-                        user["reply_1"] = ""
                         send_message(
                             callback_chat_id,
-                            "Напиши одним сообщением, что тебя сейчас больше всего волнует, и я мягко подведу тебя к нужному формату 💬"
+                            "Давай выберем точнее ✨\n\nЧто тебе сейчас важнее всего?",
+                            focus_keyboard()
                         )
 
                     elif data == "check_payment":
