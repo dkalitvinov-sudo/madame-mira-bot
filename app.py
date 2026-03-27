@@ -41,6 +41,17 @@ def send_message(chat_id, text, reply_markup=None):
     requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
 
 
+def edit_message(chat_id, message_id, text, reply_markup=None):
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    requests.post(f"{TELEGRAM_API_URL}/editMessageText", json=payload, timeout=30)
+
+
 def send_photo(chat_id, file_id, caption=None, reply_markup=None):
     payload = {
         "chat_id": chat_id,
@@ -84,12 +95,8 @@ def notify_admin(text):
     )
 
 
-def notify_admin_with_buttons(text, user_id):
-    if not ADMIN_CHAT_ID:
-        print("ADMIN_CHAT_ID not set")
-        return
-
-    keyboard = {
+def admin_receipt_keyboard(user_id):
+    return {
         "inline_keyboard": [
             [
                 {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
@@ -98,23 +105,12 @@ def notify_admin_with_buttons(text, user_id):
         ]
     }
 
-    requests.post(
-        f"{TELEGRAM_API_URL}/sendMessage",
-        json={
-            "chat_id": ADMIN_CHAT_ID,
-            "text": text,
-            "reply_markup": keyboard
-        },
-        timeout=30
-    )
 
-
-def admin_receipt_keyboard(user_id):
+def admin_application_keyboard(user_id):
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Подтвердить", "callback_data": f"admin_accept_{user_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"admin_reject_{user_id}"}
+                {"text": "🪄 Сделать разбор", "callback_data": f"admin_reading_{user_id}"}
             ]
         ]
     }
@@ -132,7 +128,8 @@ def get_user_state(user_id):
             "invoice_id": None,
             "invoice_url": None,
             "initial_text": "",
-            "reply_1": ""
+            "reply_1": "",
+            "status": "new"
         }
     return USER_STATE[user_id]
 
@@ -148,7 +145,8 @@ def reset_user_form(user_id):
         "invoice_id": None,
         "invoice_url": None,
         "initial_text": "",
-        "reply_1": ""
+        "reply_1": "",
+        "status": "new"
     }
 
 
@@ -248,12 +246,12 @@ def gpt_first_reply(user_text: str):
 Ты — Madame Mira.
 Стиль: женственный, мягкий, мистический, тёплый.
 
-Нужно написать ПЕРВОЕ сообщение после того, как человек поделился ситуацией.
+Нужно написать первое сообщение после того, как человек поделился ситуацией.
 
 Правила:
 1. Покажи, что ты почувствовала его состояние.
 2. Дай короткий эффект "я тебя вижу".
-3. Задай ОДИН тёплый вопрос.
+3. Задай один тёплый вопрос.
 4. Не продавай.
 5. Не упоминай оплату, цены, форматы.
 6. На русском.
@@ -290,7 +288,7 @@ def gpt_recommend(initial_text: str, reply_1: str):
 1. Сначала смотри, можно ли помочь через более лёгкий вход.
 2. Если ситуация не критически тяжёлая и не многослойная, предпочитай basic.
 3. Deep выбирай только когда в истории реально много боли, запутанности, измены, тяжёлой динамики или большого контекста.
-4. Выбери только ОДИН формат.
+4. Выбери только один формат.
 5. Объясни, почему он подходит.
 6. Сделай это мягко и красиво, без давления.
 7. Не перечисляй оба варианта.
@@ -331,6 +329,79 @@ def gpt_recommend(initial_text: str, reply_1: str):
         "offer": offer,
         "message": message
     }
+
+
+def gpt_make_reading(user):
+    offer_text = format_offer_text(user.get("offer"))
+
+    prompt = f"""
+Ты — Madame Mira.
+Сделай готовый разбор для клиента на русском.
+
+Стиль:
+- женственный
+- мистический
+- мягкий
+- уверенный
+- премиальный
+- без пошлости и без цирка
+
+Задача:
+1. Напиши разбор так, будто это персональный ответ.
+2. Не говори, что ты ИИ.
+3. Не упоминай модель, систему, промпт.
+4. Дай ощущение, что ты почувствовала суть.
+5. Структура:
+   - короткое вступление
+   - что ты видишь в ситуации
+   - главный внутренний узел
+   - куда лучше смотреть дальше
+   - мягкое завершение
+6. Для basic ответ короче.
+7. Для deep ответ подробнее и глубже.
+8. Не используй списки с цифрами.
+9. Не пиши слишком сухо.
+
+Данные клиента:
+Формат: {offer_text}
+Имя: {user.get("name")}
+Ситуация: {user.get("situation")}
+Что хочет понять: {user.get("question")}
+""".strip()
+
+    if not client:
+        if user.get("offer") == "basic":
+            return (
+                f"{user.get('name')}, я посмотрела в суть твоей истории ✨\n\n"
+                "Сейчас я вижу, что основная боль рождается не только из самих событий, а из ощущения, что тебя будто не слышат и не встречают по-настоящему.\n\n"
+                "Здесь важно не пытаться вытащить отношения одной силой. В первую очередь тебе нужна ясность: есть ли с той стороны реальная готовность слышать тебя и двигаться навстречу.\n\n"
+                "Твоя точка силы сейчас не в том, чтобы давить, а в том, чтобы увидеть правду без самообмана. Именно из этой ясности и рождается правильное движение дальше 💫"
+            )
+        return (
+            f"{user.get('name')}, я глубже вошла в твою ситуацию ✨\n\n"
+            "Я вижу, что здесь много накопленного напряжения. Не только обида или усталость, а внутреннее чувство, что ты стараешься удержать то, что перестало откликаться тебе так, как нужно сердцу.\n\n"
+            "Главный узел в этой истории связан с нарушенным контактом. Когда один человек пытается достучаться, а другой словно закрыт, в отношениях начинает расти не близость, а одиночество вдвоём.\n\n"
+            "Сейчас тебе важно не просто наладить связь любой ценой, а честно посмотреть: есть ли между вами живое движение навстречу, или ты слишком долго несёшь всё на себе.\n\n"
+            "Я вижу, что твой путь сейчас — не в бесконечных попытках заслужить отклик, а в возвращении к собственной ценности, голосу и внутренней опоре. Когда ты перестаёшь терять себя, становится видно, кто действительно готов быть рядом.\n\n"
+            "Если смотреть дальше, то для тебя открывается не только тема отношений, но и тема личной силы. И именно через неё приходит та ясность, которой тебе сейчас так не хватает 💫"
+        )
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
+        text = (response.output_text or "").strip()
+        if text:
+            return text
+    except Exception as e:
+        print("GPT READING ERROR:", str(e))
+
+    return (
+        f"{user.get('name')}, я посмотрела в глубину этой истории ✨\n\n"
+        "Сейчас для тебя особенно важно не идти за тревогой, а за ясностью. Там, где нет ясности, сердце начинает додумывать и уставать сильнее, чем от самих событий.\n\n"
+        "Я вижу, что тебе нужно не только понять другого человека, но и снова услышать себя. И именно это станет для тебя точкой разворота дальше 💫"
+    )
 
 
 def create_crypto_invoice(user_id, offer):
@@ -458,7 +529,17 @@ def finish_application(chat_id, user_id):
         f"Invoice ID: {user['invoice_id']}"
     )
 
-    notify_admin(admin_text)
+    requests.post(
+        f"{TELEGRAM_API_URL}/sendMessage",
+        json={
+            "chat_id": ADMIN_CHAT_ID,
+            "text": admin_text,
+            "reply_markup": admin_application_keyboard(user_id)
+        },
+        timeout=30
+    )
+
+    user["status"] = "submitted"
     user["step"] = "done"
 
 
@@ -487,25 +568,6 @@ def handle_user_message(chat_id, user_id, text):
             chat_id,
             "Жду фото или скрин чека ✨\n\nПросто отправь изображение сюда, и я передам его на проверку."
         )
-        return
-
-    if user["step"] == "waiting_card_receipt_text":
-        notify_admin_with_buttons(
-            "Запрос на ручную проверку оплаты 💳\n\n"
-            f"User ID: {user_id}\n"
-            f"Формат: {format_offer_text(user.get('offer'))}\n"
-            f"Оплата: перевод на карту\n"
-            f"Сумма: {format_card_amount_uah(user.get('offer'))} грн\n\n"
-            f"Сообщение клиента:\n{text}",
-            user_id
-        )
-
-        send_message(
-            chat_id,
-            "Я передала сообщение на ручную проверку ✨\n\n"
-            "Как только оплата будет проверена, я напишу тебе."
-        )
-        user["step"] = "waiting_manual_approval"
         return
 
     if user["step"] == "waiting_clarify_1":
@@ -562,6 +624,7 @@ def handle_photo_or_document(chat_id, user_id, file_id, media_type):
     )
 
     user["payment_method"] = "перевод на карту"
+    user["status"] = "receipt_sent"
     user["step"] = "waiting_manual_approval"
 
 
@@ -585,7 +648,7 @@ def main():
                     chat_id = message["chat"]["id"]
                     user_id = message["from"]["id"]
 
-                    # Игнорируем обычные сообщения из админ-группы
+                    # Игнорируем любые обычные сообщения из админ-группы
                     if chat_id == ADMIN_CHAT_ID:
                         continue
 
@@ -619,6 +682,7 @@ def main():
                     data = query["data"]
                     callback_chat_id = query["message"]["chat"]["id"]
                     callback_from_id = query["from"]["id"]
+                    callback_message_id = query["message"]["message_id"]
 
                     answer_callback_query(query["id"])
 
@@ -718,6 +782,7 @@ def main():
                         user = get_user_state(target_user_id)
                         user["payment_method"] = "перевод на карту"
                         user["step"] = "waiting_name"
+                        user["status"] = "paid"
 
                         send_message(
                             target_user_id,
@@ -735,6 +800,7 @@ def main():
                         target_user_id = int(data.split("_")[2])
                         user = get_user_state(target_user_id)
                         user["step"] = "waiting_card_receipt"
+                        user["status"] = "receipt_rejected"
 
                         send_message(
                             target_user_id,
@@ -746,6 +812,41 @@ def main():
                             ADMIN_CHAT_ID,
                             f"Заявка {target_user_id} отклонена ❌"
                         )
+
+                    elif data.startswith("admin_reading_"):
+                        target_user_id = int(data.split("_")[2])
+                        user = get_user_state(target_user_id)
+
+                        if user.get("status") == "reading_sent":
+                            send_message(
+                                ADMIN_CHAT_ID,
+                                f"Разбор для {target_user_id} уже был отправлен ✨"
+                            )
+                            continue
+
+                        send_message(
+                            target_user_id,
+                            "Я вхожу в твою ситуацию глубже ✨\n\n"
+                            "Сейчас соберу для тебя сам разбор."
+                        )
+
+                        reading_text = gpt_make_reading(user)
+
+                        send_message(target_user_id, reading_text)
+
+                        user["status"] = "reading_sent"
+
+                        try:
+                            edit_message(
+                                ADMIN_CHAT_ID,
+                                callback_message_id,
+                                query["message"]["text"] + "\n\nРазбор отправлен ✅"
+                            )
+                        except Exception:
+                            send_message(
+                                ADMIN_CHAT_ID,
+                                f"Разбор для {target_user_id} отправлен ✅"
+                            )
 
         except Exception as e:
             print("RUNTIME ERROR:", str(e))
