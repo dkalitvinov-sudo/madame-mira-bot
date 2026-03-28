@@ -27,13 +27,13 @@ ANALYTICS = {
     "receipts_sent": 0
 }
 
-BASIC_USD = "10"
-DEEP_USD = "20"
-VIP_USD = "50"
+BASIC_USD = "5"
+DEEP_USD = "12"
+VIP_USD = "25"
 
-BASIC_UAH = "440"
-DEEP_UAH = "880"
-VIP_UAH = "2200"
+BASIC_UAH = "200"
+DEEP_UAH = "500"
+VIP_UAH = "1000"
 
 WARMUP_1_DELAY = 45 * 60
 WARMUP_2_DELAY = 24 * 60 * 60
